@@ -30,7 +30,11 @@ from mlx_use.mac.element import MacElementNode
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="macOS UI Tree Explorer - Optimized", version="0.2.0")
+# Constants for error messages
+ELEMENT_NOT_FOUND_ERROR = "Element not found"
+TREE_NOT_AVAILABLE_ERROR = "Tree not available"
+
+app = FastAPI(title="macOS UI Tree Explorer - Optimized", version="0.2.1")
 
 # Enhanced global state with caching
 class AppTreeCache:
@@ -181,6 +185,273 @@ def _convert_element_to_info(element: MacElementNode, parent_path: str = None) -
 		parent_path=parent_path
 	)
 
+# Constants for filtering
+EXCLUDE_ROLES = ['AXRow', 'AXCell', 'AXTable', 'AXColumn', 'AXColumnHeader']
+CONTAINER_ROLES = ['AXWindow', 'AXGroup', 'AXScrollArea', 'AXSplitGroup', 'AXTabGroup', 'AXToolbar', 'AXPopUpButton', 'AXMenuBar', 'AXOutline']
+
+def _has_interactive_descendants(node: MacElementNode, max_depth: int = 2, current_depth: int = 0) -> bool:
+	"""Check if node has interactive descendants within depth limit"""
+	if current_depth >= max_depth:
+		return False
+	
+	for grandchild in node.children:
+		# Skip checking excluded display elements
+		if grandchild.role in EXCLUDE_ROLES and not grandchild.is_interactive:
+			continue
+		if grandchild.is_interactive:
+			return True
+		if grandchild.children and _has_interactive_descendants(grandchild, max_depth, current_depth + 1):
+			return True
+	return False
+
+def _should_include_child(child: MacElementNode) -> bool:
+	"""Determine if a child element should be included in interactive filtering"""
+	# EXCLUDE display-only elements that are not interactive
+	if child.role in EXCLUDE_ROLES and not child.is_interactive:
+		return False
+	
+	# Include if child is directly interactive
+	if child.is_interactive:
+		return True
+	
+	# Include important container roles
+	if child.role in CONTAINER_ROLES:
+		return True
+	
+	# Include if has interactive descendants
+	if child.children and _has_interactive_descendants(child):
+		return True
+	
+	return False
+
+def _filter_children_for_interactive(children: list) -> list:
+	"""Filter children to include only interactive or structurally important elements"""
+	filtered_children = []
+	for child in children:
+		if _should_include_child(child):
+			filtered_children.append(child)
+	return filtered_children[:50]  # Limit for performance
+
+# App filtering helper functions
+def _should_include_apple_app(bundle_id: str) -> bool:
+	"""Check if an Apple app should be included based on bundle ID"""
+	allowed_apple_apps = ['Notes', 'Finder', 'Safari', 'TextEdit', 'Calculator']
+	return any(app in bundle_id for app in allowed_apple_apps)
+
+def _should_exclude_system_process(bundle_id: str, name: str) -> bool:
+	"""Check if an app should be excluded as a system process"""
+	excluded_names = ['loginwindow', 'WindowServer', 'Dock']
+	return (not bundle_id or 
+			(bundle_id.startswith('com.apple.') and not _should_include_apple_app(bundle_id)) or
+			name in excluded_names)
+
+def _create_app_info(app) -> AppInfo:
+	"""Create AppInfo object from NSRunningApplication"""
+	return AppInfo(
+		pid=app.processIdentifier(),
+		name=app.localizedName() or "Unknown",
+		bundle_id=app.bundleIdentifier() or "",
+		is_active=app.isActive()
+	)
+
+def _get_app_sort_key(app: AppInfo) -> tuple:
+	"""Get sort key for application, prioritizing Notes app"""
+	if app.bundle_id == 'com.apple.Notes':
+		return (0, app.name.lower())  # Highest priority
+	return (1 if not app.is_active else 0, app.name.lower())
+
+# Element expansion helper functions
+def _find_element_by_path(node: MacElementNode, target_path: str) -> Optional[MacElementNode]:
+	"""Recursively find element by accessibility path"""
+	if node.accessibility_path == target_path:
+		return node
+	for child in node.children:
+		result = _find_element_by_path(child, target_path)
+		if result:
+			return result
+	return None
+
+async def _expand_element_with_builder(builder, element: MacElementNode, pid: int) -> Optional[MacElementNode]:
+	"""Expand element using builder with deeper traversal"""
+	original_max_depth = builder.max_depth
+	builder.max_depth = 8  # Allow deeper expansion
+	
+	try:
+		return await builder._process_element(element._element_ref, pid, element.parent, 0)
+	finally:
+		builder.max_depth = original_max_depth
+
+def _create_expansion_response(element: MacElementNode) -> dict:
+	"""Create response for element expansion"""
+	element_info = _convert_element_to_info(element)
+	children = [_convert_tree_to_json_incremental(child, 3, interactive_only=True) 
+			   for child in element.children]
+	
+	return {
+		"element": element_info,
+		"children": children,
+		"expanded": True
+	}
+
+# Search helper functions
+def _normalize_search_query(query: str, case_sensitive: bool) -> str:
+	"""Normalize search query for comparison"""
+	query = query.strip()
+	return query if case_sensitive else query.lower()
+
+def _extract_searchable_text(element: ElementInfo, case_sensitive: bool) -> str:
+	"""Extract searchable text from element"""
+	searchable_parts = []
+	
+	# Add role
+	if element.role:
+		searchable_parts.append(str(element.role))
+	
+	# Add relevant attributes
+	for attr_key in ['title', 'value', 'description', 'label', 'placeholder']:
+		attr_value = element.attributes.get(attr_key)
+		if attr_value:
+			sanitized = _sanitize_value(attr_value)
+			if sanitized and str(sanitized).strip():
+				searchable_parts.append(str(sanitized))
+	
+	# Add actions
+	if element.actions:
+		searchable_parts.extend(element.actions)
+	
+	# Join and normalize
+	searchable_text = " ".join(searchable_parts)
+	return searchable_text if case_sensitive else searchable_text.lower()
+
+def _should_log_debug_info(element: ElementInfo, debug_count: int) -> bool:
+	"""Check if element should be logged for debugging"""
+	return element.role == 'AXButton' and debug_count < 5
+
+def _create_search_result(matching_elements: List[ElementInfo], search_time: float) -> ElementSearchResult:
+	"""Create search result response"""
+	return ElementSearchResult(
+		elements=matching_elements,
+		total_count=len(matching_elements),
+		search_time=search_time
+	)
+
+# Text input helper functions
+def _find_supported_text_input_action(element_actions: List[str]) -> Optional[str]:
+	"""Find supported text input action for element"""
+	text_input_actions = ['AXSetValue', 'AXConfirm']
+	for action in text_input_actions:
+		if action in element_actions:
+			return action
+	return None
+
+def _try_direct_value_setting(element, text: str) -> tuple[bool, str]:
+	"""Try direct AXValueAttribute setting"""
+	from ApplicationServices import AXUIElementSetAttributeValue, kAXValueAttribute
+	from Foundation import NSString
+	
+	try:
+		ns_text = NSString.stringWithString_(text)
+		error = AXUIElementSetAttributeValue(element._element, kAXValueAttribute, ns_text)
+		if error == 0:  # kAXErrorSuccess
+			return True, "Direct AXValueAttribute setting"
+	except Exception as e:
+		logger.warning(f"Direct value setting failed: {e}")
+	return False, ""
+
+async def _try_click_then_set_value(element, text: str) -> tuple[bool, str]:
+	"""Try clicking element then setting value"""
+	from mlx_use.mac.actions import click
+	from ApplicationServices import AXUIElementSetAttributeValue, kAXValueAttribute
+	from Foundation import NSString
+	
+	try:
+		click_result = click(element, 'AXConfirm')
+		if click_result:
+			# Wait for focus
+			await asyncio.sleep(0.2)
+			ns_text = NSString.stringWithString_(text)
+			error = AXUIElementSetAttributeValue(element._element, kAXValueAttribute, ns_text)
+			if error == 0:
+				return True, "Click + AXValueAttribute setting"
+	except Exception as e:
+		logger.warning(f"Click then set value failed: {e}")
+	return False, ""
+
+def _try_click_then_type_into(element, text: str) -> tuple[bool, str]:
+	"""Try clicking element then using type_into"""
+	from mlx_use.mac.actions import click, type_into
+	
+	try:
+		click_result = click(element, 'AXConfirm')
+		if click_result:
+			result = type_into(element, text)
+			if result:
+				return True, "Click + type_into"
+	except Exception as e:
+		logger.warning(f"Click then type_into failed: {e}")
+	return False, ""
+
+def _try_fallback_type_into(element, text: str) -> tuple[bool, str]:
+	"""Try fallback type_into method"""
+	from mlx_use.mac.actions import type_into
+	
+	try:
+		result = type_into(element, text)
+		if result:
+			return True, "Fallback type_into"
+	except Exception as e:
+		logger.warning(f"Fallback type_into failed: {e}")
+	return False, ""
+
+async def _handle_axconfirm_input(element, text: str) -> tuple[bool, str]:
+	"""Handle text input for elements with AXConfirm action"""
+	# Method 1: Direct attribute setting
+	success, method = _try_direct_value_setting(element, text)
+	if success:
+		return success, method
+	
+	# Method 2: Click then set value
+	success, method = await _try_click_then_set_value(element, text)
+	if success:
+		return success, method
+	
+	# Method 3: Click then type_into
+	success, method = _try_click_then_type_into(element, text)
+	if success:
+		return success, method
+	
+	return False, ""
+
+def _handle_axsetvalue_input(element, text: str) -> tuple[bool, str]:
+	"""Handle text input for elements with AXSetValue action"""
+	from mlx_use.mac.actions import type_into
+	
+	try:
+		result = type_into(element, text)
+		if result:
+			return True, "type_into with AXSetValue"
+	except Exception as e:
+		logger.warning(f"AXSetValue method failed: {e}")
+	return False, ""
+
+def _create_text_input_response(success: bool, text: str, element, method_used: str, supported_action: str) -> dict:
+	"""Create response for text input operation"""
+	if success:
+		return {
+			"status": "success", 
+			"message": f"Typed '{text}' into {element.role} using {method_used}",
+			"element": {
+				"role": element.role,
+				"title": element.attributes.get('title', ''),
+				"path": element.accessibility_path
+			}
+		}
+	else:
+		return {
+			"status": "failed",
+			"message": f"Failed to type into {element.role}. Tried methods for {supported_action}."
+		}
+
 def _convert_tree_to_json_incremental(element: MacElementNode, max_depth: int = 2, current_depth: int = 0, parent_path: str = None, interactive_only: bool = True) -> TreeNode:
 	"""Convert tree with incremental loading support and interactive filtering"""
 	element_info = _convert_element_to_info(element, parent_path)
@@ -190,47 +461,9 @@ def _convert_tree_to_json_incremental(element: MacElementNode, max_depth: int = 
 	
 	if is_expanded and element.children:
 		if interactive_only:
-			# Filter for interactive elements and important containers
-			filtered_children = []
-			for child in element.children:
-				include_child = False
-				
-				# EXCLUDE display-only elements that are not interactive
-				exclude_roles = ['AXRow', 'AXCell', 'AXTable', 'AXColumn', 'AXColumnHeader']
-				if child.role in exclude_roles and not child.is_interactive:
-					include_child = False
-				
-				# Include if child is directly interactive
-				elif child.is_interactive:
-					include_child = True
-				
-				# Include important container roles (but not if they're in exclude list)
-				elif child.role in ['AXWindow', 'AXGroup', 'AXScrollArea', 'AXSplitGroup', 'AXTabGroup', 'AXToolbar', 'AXPopUpButton', 'AXMenuBar', 'AXOutline']:
-					include_child = True
-				
-				# Include if has interactive descendants (check deeper)
-				elif child.children:
-					def has_interactive_descendants(node, max_depth=2, current_depth=0):
-						if current_depth >= max_depth:
-							return False
-						for grandchild in node.children:
-							# Skip checking excluded display elements
-							if grandchild.role in exclude_roles and not grandchild.is_interactive:
-								continue
-							if grandchild.is_interactive:
-								return True
-							if grandchild.children and has_interactive_descendants(grandchild, max_depth, current_depth + 1):
-								return True
-						return False
-					
-					if has_interactive_descendants(child):
-						include_child = True
-				
-				if include_child:
-					filtered_children.append(child)
-			
+			filtered_children = _filter_children_for_interactive(element.children)
 			children = [_convert_tree_to_json_incremental(child, max_depth, current_depth + 1, element.accessibility_path, interactive_only) 
-					   for child in filtered_children[:50]]  # Increased limit for interactive elements
+					   for child in filtered_children]
 		else:
 			# Show all elements (original behavior)
 			children = [_convert_tree_to_json_incremental(child, max_depth, current_depth + 1, element.accessibility_path, interactive_only) 
@@ -1222,61 +1455,62 @@ async def get_running_apps():
 		apps = []
 		
 		for app in workspace.runningApplications():
-			# Include more apps but filter out system processes
 			bundle_id = app.bundleIdentifier() or ""
 			name = app.localizedName() or "Unknown"
 			
 			# Priority for Notes app - always include
 			if bundle_id == 'com.apple.Notes':
-				apps.append(AppInfo(
-					pid=app.processIdentifier(),
-					name=name,
-					bundle_id=bundle_id,
-					is_active=app.isActive()
-				))
+				apps.append(_create_app_info(app))
 				continue
 			
 			# Skip system processes and hidden apps
-			if (not bundle_id or 
-				bundle_id.startswith('com.apple.') and not any(x in bundle_id for x in ['Notes', 'Finder', 'Safari', 'TextEdit', 'Calculator']) or
-				name in ['loginwindow', 'WindowServer', 'Dock']):
+			if _should_exclude_system_process(bundle_id, name):
 				continue
 			
-			apps.append(AppInfo(
-				pid=app.processIdentifier(),
-				name=name,
-				bundle_id=bundle_id,
-				is_active=app.isActive()
-			))
+			apps.append(_create_app_info(app))
 		
 		# Sort by active status and name, but prioritize Notes
-		def sort_key(app):
-			if app.bundle_id == 'com.apple.Notes':
-				return (0, app.name.lower())  # Highest priority
-			return (1 if not app.is_active else 0, app.name.lower())
-		
-		apps.sort(key=sort_key)
+		apps.sort(key=_get_app_sort_key)
 		return apps
 		
 	except Exception as e:
 		logger.error(f"Error getting running apps: {e}")
 		raise HTTPException(status_code=500, detail=str(e))
 
+def _check_quick_cache(pid: int, max_depth: int, interactive_only: bool) -> Optional[TreeNode]:
+	"""Check if quick cache can be used and return cached tree if available"""
+	if pid in cache.trees and pid in cache.last_updated:
+		age = time.time() - cache.last_updated[pid]
+		if age < 5:  # Use cache if less than 5 seconds old
+			logger.info(f"Using quick cache for PID {pid} (age: {age:.1f}s)")
+			return _convert_tree_to_json_incremental(cache.trees[pid], max_depth, interactive_only=interactive_only)
+	return None
+
+def _determine_max_depth(max_depth: int, interactive_only: bool) -> int:
+	"""Determine appropriate max_depth based on mode"""
+	if max_depth is None:
+		return 5 if interactive_only else 3
+	return max_depth
+
+def _log_tree_build_info(pid: int, interactive_only: bool, max_depth: int, lazy_mode: bool):
+	"""Log information about tree building parameters"""
+	if interactive_only:
+		logger.info(f"Building tree for PID {pid} with interactive-only filter (max_depth={max_depth}, lazy_mode={lazy_mode})")
+	else:
+		logger.info(f"Building tree for PID {pid} with all elements (max_depth={max_depth}, lazy_mode={lazy_mode})")
+
 @app.get("/api/apps/{pid}/tree", response_model=TreeNode)
 async def get_app_tree(pid: int, max_depth: int = None, force: bool = False, quick: bool = False, interactive_only: bool = True):
 	"""Get UI tree with caching and incremental loading, filtered for interactive elements by default"""
 	try:
+		# Set appropriate default max_depth based on mode
+		max_depth = _determine_max_depth(max_depth, interactive_only)
+		
 		# Quick mode for faster refresh
 		if quick and not force:
-			# Check if we have recent cache
-			if pid in cache.trees and pid in cache.last_updated:
-				age = time.time() - cache.last_updated[pid]
-				if age < 5:  # Use cache if less than 5 seconds old
-					logger.info(f"Using quick cache for PID {pid} (age: {age:.1f}s)")
-					# Set default max_depth for quick refresh too
-					if max_depth is None:
-						max_depth = 5 if interactive_only else 3
-					return _convert_tree_to_json_incremental(cache.trees[pid], max_depth, interactive_only=interactive_only)
+			cached_result = _check_quick_cache(pid, max_depth, interactive_only)
+			if cached_result:
+				return cached_result
 		
 		# Use lazy loading for better performance, except when explicitly requesting full tree
 		lazy_mode = not force  # Force refresh means full tree
@@ -1284,15 +1518,8 @@ async def get_app_tree(pid: int, max_depth: int = None, force: bool = False, qui
 		if not tree:
 			raise HTTPException(status_code=404, detail="Could not build UI tree for application")
 		
-		# Set appropriate default max_depth based on mode
-		if max_depth is None:
-			max_depth = 5 if interactive_only else 3
-		
 		# Log filtering info
-		if interactive_only:
-			logger.info(f"Building tree for PID {pid} with interactive-only filter (max_depth={max_depth}, lazy_mode={lazy_mode})")
-		else:
-			logger.info(f"Building tree for PID {pid} with all elements (max_depth={max_depth}, lazy_mode={lazy_mode})")
+		_log_tree_build_info(pid, interactive_only, max_depth, lazy_mode)
 		
 		return _convert_tree_to_json_incremental(tree, max_depth, interactive_only=interactive_only)
 		
@@ -1309,48 +1536,23 @@ async def expand_element(pid: int, element_path: str):
 	try:
 		# Get cached tree
 		if pid not in cache.trees:
-			raise HTTPException(status_code=404, detail="Tree not available. Load tree first.")
+			raise HTTPException(status_code=404, detail=f"{TREE_NOT_AVAILABLE_ERROR}. Load tree first.")
 		
 		tree = cache.trees[pid]
 		
 		# Find the element to expand
-		def find_element_by_path(node: MacElementNode, target_path: str) -> Optional[MacElementNode]:
-			if node.accessibility_path == target_path:
-				return node
-			for child in node.children:
-				result = find_element_by_path(child, target_path)
-				if result:
-					return result
-			return None
-		
-		element = find_element_by_path(tree, element_path)
+		element = _find_element_by_path(tree, element_path)
 		if not element:
-			raise HTTPException(status_code=404, detail="Element not found")
+			raise HTTPException(status_code=404, detail=ELEMENT_NOT_FOUND_ERROR)
 		
 		# Build deeper tree for this element using full depth
 		builder = cache.get_builder(pid)
-		original_max_depth = builder.max_depth
-		builder.max_depth = 8  # Allow deeper expansion
+		expanded_element = await _expand_element_with_builder(builder, element, pid)
 		
-		try:
-			# Re-process this element with deeper traversal
-			expanded_element = await builder._process_element(element._element_ref, pid, element.parent, 0)
-			if expanded_element:
-				# Replace the element in the tree
-				element.children = expanded_element.children
-				
-				# Convert to response format
-				element_info = _convert_element_to_info(element)
-				children = [_convert_tree_to_json_incremental(child, 3, interactive_only=True) 
-						   for child in element.children]
-				
-				return {
-					"element": element_info,
-					"children": children,
-					"expanded": True
-				}
-		finally:
-			builder.max_depth = original_max_depth
+		if expanded_element:
+			# Replace the element in the tree
+			element.children = expanded_element.children
+			return _create_expansion_response(element)
 		
 		raise HTTPException(status_code=500, detail="Failed to expand element")
 		
@@ -1366,9 +1568,7 @@ async def search_elements_optimized(pid: int, q: str, case_sensitive: bool = Fal
 		
 		# Normalize query for better matching
 		original_query = q
-		query = q.strip()
-		if not case_sensitive:
-			query = query.lower()
+		query = _normalize_search_query(q, case_sensitive)
 		
 		logger.info(f"Search request: '{original_query}' -> normalized: '{query}' (case_sensitive: {case_sensitive})")
 		
@@ -1378,11 +1578,7 @@ async def search_elements_optimized(pid: int, q: str, case_sensitive: bool = Fal
 			cached_results = cache.search_cache[cache_key]
 			search_time = time.time() - start_time
 			logger.info(f"Cache hit for search '{query}': {len(cached_results)} results")
-			return ElementSearchResult(
-				elements=cached_results,
-				total_count=len(cached_results),
-				search_time=search_time
-			)
+			return _create_search_result(cached_results, search_time)
 		
 		# Ensure we have tree data
 		await _build_tree_cached(pid)
@@ -1394,34 +1590,11 @@ async def search_elements_optimized(pid: int, q: str, case_sensitive: bool = Fal
 		debug_count = 0
 		
 		for element in elements:
-			# Enhanced search including more fields with safe string conversion
-			searchable_parts = []
-			
-			# Add role
-			if element.role:
-				searchable_parts.append(str(element.role))
-			
-			# Add all relevant attributes
-			for attr_key in ['title', 'value', 'description', 'label', 'placeholder']:
-				attr_value = element.attributes.get(attr_key)
-				if attr_value:
-					sanitized = _sanitize_value(attr_value)
-					if sanitized and str(sanitized).strip():
-						searchable_parts.append(str(sanitized))
-			
-			# Add actions
-			if element.actions:
-				searchable_parts.extend(element.actions)
-			
-			# Join all parts
-			searchable_text = " ".join(searchable_parts)
-			
-			# Normalize for comparison
-			if not case_sensitive:
-				searchable_text = searchable_text.lower()
+			# Extract searchable text from element
+			searchable_text = _extract_searchable_text(element, case_sensitive)
 			
 			# Debug logging for buttons
-			if element.role == 'AXButton' and debug_count < 5:
+			if _should_log_debug_info(element, debug_count):
 				logger.info(f"Button {debug_count}: '{searchable_text}' (searching for: '{query}')")
 				debug_count += 1
 			
@@ -1437,15 +1610,40 @@ async def search_elements_optimized(pid: int, q: str, case_sensitive: bool = Fal
 			cache.search_cache[cache_key] = matching_elements
 		
 		search_time = time.time() - start_time
-		return ElementSearchResult(
-			elements=matching_elements,
-			total_count=len(matching_elements),
-			search_time=search_time
-		)
+		return _create_search_result(matching_elements, search_time)
 		
 	except Exception as e:
 		logger.error(f"Error searching elements: {e}")
 		raise HTTPException(status_code=500, detail=str(e))
+
+def _extract_query_target(element: ElementInfo, query_type: str) -> str:
+	"""Extract target text from element based on query type"""
+	if query_type == "role":
+		return element.role
+	elif query_type == "title":
+		return _sanitize_value(element.attributes.get('title', ''))
+	elif query_type == "action":
+		return " ".join(element.actions)
+	elif query_type == "text":
+		parts = [
+			element.role,
+			_sanitize_value(element.attributes.get('title', '')),
+			_sanitize_value(element.attributes.get('value', '')),
+			_sanitize_value(element.attributes.get('description', ''))
+		]
+		return " ".join(str(part) for part in parts if part)
+	else:  # custom
+		try:
+			return json.dumps(element.dict())
+		except (TypeError, ValueError):
+			return str(element.dict())
+
+def _normalize_query_target(target: str, query_value: str, case_sensitive: bool) -> tuple[str, str]:
+	"""Normalize target and query for comparison"""
+	target = str(target)
+	if not case_sensitive:
+		return target.lower(), query_value.lower()
+	return target, query_value
 
 @app.post("/api/apps/{pid}/query", response_model=ElementSearchResult)
 async def query_elements_optimized(pid: int, query: QueryRequest):
@@ -1458,34 +1656,8 @@ async def query_elements_optimized(pid: int, query: QueryRequest):
 		matching_elements = []
 		
 		for element in elements:
-			if query.query_type == "role":
-				target = element.role
-			elif query.query_type == "title":
-				target = _sanitize_value(element.attributes.get('title', ''))
-			elif query.query_type == "action":
-				target = " ".join(element.actions)
-			elif query.query_type == "text":
-				parts = [
-					element.role,
-					_sanitize_value(element.attributes.get('title', '')),
-					_sanitize_value(element.attributes.get('value', '')),
-					_sanitize_value(element.attributes.get('description', ''))
-				]
-				target = " ".join(str(part) for part in parts if part)
-			else:  # custom
-				try:
-					target = json.dumps(element.dict())
-				except:
-					target = str(element.dict())
-			
-			# Safe string conversion
-			target = str(target)
-			
-			if not query.case_sensitive:
-				target = target.lower()
-				search_value = query.query_value.lower()
-			else:
-				search_value = query.query_value
+			target = _extract_query_target(element, query.query_type)
+			target, search_value = _normalize_query_target(target, query.query_value, query.case_sensitive)
 			
 			if search_value in target:
 				matching_elements.append(element)
@@ -1561,12 +1733,12 @@ async def execute_action(pid: int, request: ActionRequest):
 		# Ensure we have current tree
 		await _build_tree_cached(pid)
 		if pid not in cache.trees:
-			raise HTTPException(status_code=404, detail="Tree not available")
+			raise HTTPException(status_code=404, detail=TREE_NOT_AVAILABLE_ERROR)
 		
 		# Find element by path
 		target_element = cache.trees[pid].find_element_by_path(request.element_path)
 		if not target_element:
-			raise HTTPException(status_code=404, detail="Element not found")
+			raise HTTPException(status_code=404, detail=ELEMENT_NOT_FOUND_ERROR)
 		
 		# Check if element supports the action
 		if request.action not in target_element.actions:
@@ -1617,97 +1789,42 @@ async def type_text(pid: int, request: TypeRequest):
 		# Ensure we have current tree
 		await _build_tree_cached(pid)
 		if pid not in cache.trees:
-			raise HTTPException(status_code=404, detail="Tree not available")
+			raise HTTPException(status_code=404, detail=TREE_NOT_AVAILABLE_ERROR)
 		
 		# Find element by path
 		target_element = cache.trees[pid].find_element_by_path(request.element_path)
 		if not target_element:
-			raise HTTPException(status_code=404, detail="Element not found")
+			raise HTTPException(status_code=404, detail=ELEMENT_NOT_FOUND_ERROR)
 		
-		# Check if element supports text input (multiple methods)
-		text_input_actions = ['AXSetValue', 'AXConfirm']
-		supported_action = None
-		for action in text_input_actions:
-			if action in target_element.actions:
-				supported_action = action
-				break
-		
+		# Check if element supports text input
+		supported_action = _find_supported_text_input_action(target_element.actions)
 		if not supported_action:
 			raise HTTPException(
 				status_code=400, 
 				detail=f"Element does not support text input. Available actions: {target_element.actions}"
 			)
 		
-		# Import action functions
-		from mlx_use.mac.actions import type_into, click
-		from ApplicationServices import (
-			AXUIElementSetAttributeValue,
-			kAXValueAttribute,
-			kAXFocusedAttribute
-		)
-		from Foundation import NSString
-		
+		# Execute text input based on supported action
 		result = False
 		method_used = ""
 		
 		try:
 			if supported_action == 'AXSetValue':
-				# Standard text input
-				result = type_into(target_element, request.text)
-				method_used = "type_into with AXSetValue"
-				
+				result, method_used = _handle_axsetvalue_input(target_element, request.text)
 			elif supported_action == 'AXConfirm':
-				# Alternative method for fields that use AXConfirm
-				try:
-					# Method 1: Try direct attribute setting
-					ns_text = NSString.stringWithString_(request.text)
-					error = AXUIElementSetAttributeValue(target_element._element, kAXValueAttribute, ns_text)
-					if error == 0:  # kAXErrorSuccess
-						result = True
-						method_used = "Direct AXValueAttribute setting"
-					else:
-						# Method 2: Try clicking first, then setting value
-						click_result = click(target_element, 'AXConfirm')
-						if click_result:
-							# Wait a moment for focus
-							await asyncio.sleep(0.2)
-							error = AXUIElementSetAttributeValue(target_element._element, kAXValueAttribute, ns_text)
-							if error == 0:
-								result = True
-								method_used = "Click + AXValueAttribute setting"
-							else:
-								# Method 3: Try type_into after clicking
-								result = type_into(target_element, request.text)
-								if result:
-									method_used = "Click + type_into"
-						
-				except Exception as e:
-					logger.warning(f"AXConfirm method failed, trying fallback: {e}")
-					# Fallback to standard type_into
-					result = type_into(target_element, request.text)
-					if result:
-						method_used = "Fallback type_into"
-		
+				result, method_used = await _handle_axconfirm_input(target_element, request.text)
+				# Try fallback if all methods failed
+				if not result:
+					result, method_used = _try_fallback_type_into(target_element, request.text)
+			
 		except Exception as e:
 			logger.error(f"All text input methods failed: {e}")
 		
 		if result:
 			# Invalidate cache after typing to get fresh tree
 			cache.invalidate(pid)
-			return {
-				"status": "success", 
-				"message": f"Typed '{request.text}' into {target_element.role} using {method_used}",
-				"element": {
-					"role": target_element.role,
-					"title": target_element.attributes.get('title', ''),
-					"path": target_element.accessibility_path
-				}
-			}
-		else:
-			return {
-				"status": "failed",
-				"message": f"Failed to type into {target_element.role}. Tried methods for {supported_action}."
-			}
+		
+		return _create_text_input_response(result, request.text, target_element, method_used, supported_action)
 			
 	except Exception as e:
 		logger.error(f"Error typing text: {e}")
@@ -1720,7 +1837,7 @@ async def get_element_by_index(pid: int, highlight_index: int):
 		# Ensure we have current tree
 		await _build_tree_cached(pid)
 		if pid not in cache.trees:
-			raise HTTPException(status_code=404, detail="Tree not available")
+			raise HTTPException(status_code=404, detail=TREE_NOT_AVAILABLE_ERROR)
 		
 		# Find element by highlight index
 		builder = cache.get_builder(pid)
@@ -1776,7 +1893,7 @@ async def clear_caches():
 	"""Clear all caches"""
 	try:
 		# Cleanup all builders
-		for pid in list(cache.builders.keys()):
+		for pid in cache.builders.keys():
 			cache.cleanup_builder(pid)
 		
 		# Clear all caches
@@ -1801,7 +1918,7 @@ async def clear_caches():
 async def shutdown_event():
 	"""Enhanced cleanup on server shutdown"""
 	global cache
-	for pid in list(cache.builders.keys()):
+	for pid in cache.builders.keys():
 		cache.cleanup_builder(pid)
 
 if __name__ == "__main__":
