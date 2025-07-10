@@ -3,8 +3,10 @@
 Demo script showing the enhanced UI Tree Explorer functionality
 """
 
-import requests
 import time
+
+import requests
+
 
 def demo_functionality():
 	"""Demo the enhanced functionality"""
@@ -63,7 +65,7 @@ def demo_functionality():
 		# Test search
 		search_queries = ['Nueva Carpeta', 'button', 'carpeta']
 		
-		print(f"\n🔍 Testing search functionality...")
+		print("\n🔍 Testing search functionality...")
 		for query in search_queries:
 			response = requests.get(f"http://localhost:8000/api/apps/{notes_pid}/search?q={query}")
 			if response.status_code == 200:
@@ -77,7 +79,7 @@ def demo_functionality():
 					print(f"      📍 Index: {button['highlight_index']}")
 		
 		# Test interactive elements
-		print(f"\n⚡ Testing interactive elements...")
+		print("\n⚡ Testing interactive elements...")
 		response = requests.get(f"http://localhost:8000/api/apps/{notes_pid}/interactive")
 		if response.status_code == 200:
 			interactive = response.json()
@@ -91,7 +93,7 @@ def demo_functionality():
 					title = button['attributes'].get('title', 'No title')
 					print(f"      - {title} [Index: {button['highlight_index']}]")
 		
-		print(f"\n🎯 Capabilities Demonstrated:")
+		print("\n🎯 Capabilities Demonstrated:")
 		print("✅ Application discovery and listing")
 		print("✅ App activation (brings to front)")
 		print("✅ UI tree building with caching")
@@ -99,21 +101,21 @@ def demo_functionality():
 		print("✅ Interactive element identification")
 		print("✅ Element indexing for automation")
 		
-		print(f"\n🌐 Web Interface Features:")
+		print("\n🌐 Web Interface Features:")
 		print("🔸 Real-time app activation on selection")
 		print("🔸 Visual search with highlighting")
 		print("🔸 Clickable action buttons on elements")
 		print("🔸 Safety confirmations for actions")
 		print("🔸 Auto-refresh after actions")
 		
-		print(f"\n🚀 Next Steps:")
+		print("\n🚀 Next Steps:")
 		print("1. Open http://localhost:8000 in your browser")
 		print("2. Click on 'Notas' to activate and explore")
 		print("3. Search for 'Nueva Carpeta'")
 		print("4. Click on the element to see action buttons")
 		print("5. Click '🎯 AXPress' to execute the action!")
 		
-		print(f"\n⚠️  Note: Action execution is REAL - it will interact with the actual app!")
+		print("\n⚠️  Note: Action execution is REAL - it will interact with the actual app!")
 		
 	except requests.exceptions.ConnectionError:
 		print("❌ Cannot connect to server. Please start it first:")

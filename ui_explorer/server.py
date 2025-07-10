@@ -7,21 +7,17 @@ Provides REST API endpoints to browse applications, explore UI trees,
 and query elements interactively.
 """
 
-import asyncio
-import logging
-import os
 import json
-from typing import Optional, List, Dict, Any
-from dataclasses import asdict
+import logging
+from typing import Any, Dict, List, Optional
 
 import Cocoa
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from mlx_use.mac.tree import MacUITreeBuilder
 from mlx_use.mac.element import MacElementNode
+from mlx_use.mac.tree import MacUITreeBuilder
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

@@ -3,9 +3,10 @@
 Test performance optimizations v2 - Lazy loading and aggressive optimizations
 """
 
-import requests
 import time
-import json
+
+import requests
+
 
 def test_performance_optimizations_v2():
 	"""Test the new performance optimizations"""
@@ -38,7 +39,7 @@ def test_performance_optimizations_v2():
 	response = requests.get("http://localhost:8000/api/performance/stats")
 	if response.status_code == 200:
 		stats = response.json()
-		print(f"✅ Performance stats retrieved")
+		print("✅ Performance stats retrieved")
 		print(f"   Cache stats: {stats['cache_stats']}")
 		print(f"   Optimization settings: {stats['optimization_settings']}")
 		print(f"   Memory optimization: {stats['memory_optimization']}")
@@ -90,7 +91,7 @@ def test_performance_optimizations_v2():
 	response = requests.get(f"http://localhost:8000/api/apps/{notes_pid}/expand?element_path={element_path}")
 	if response.status_code == 200:
 		expansion_data = response.json()
-		print(f"✅ Element expansion successful")
+		print("✅ Element expansion successful")
 		print(f"   Children loaded: {len(expansion_data.get('children', []))}")
 	else:
 		print(f"ℹ️ Element expansion not available or failed: {response.status_code}")
@@ -100,7 +101,7 @@ def test_performance_optimizations_v2():
 	response = requests.get("http://localhost:8000/api/performance/stats")
 	if response.status_code == 200:
 		updated_stats = response.json()
-		print(f"✅ Updated stats retrieved")
+		print("✅ Updated stats retrieved")
 		print(f"   Trees cached: {updated_stats['cache_stats']['trees_cached']}")
 		print(f"   Search cache size: {updated_stats['cache_stats']['search_cache_size']}")
 		tree_ages = updated_stats['tree_ages']
@@ -112,7 +113,7 @@ def test_performance_optimizations_v2():
 	improvement = ((full_time - lazy_time) / full_time) * 100 if full_time > 0 else 0
 	cache_improvement = ((lazy_time - cache_time) / lazy_time) * 100 if lazy_time > 0 else 0
 	
-	print(f"\n📈 Performance Results:")
+	print("\n📈 Performance Results:")
 	print(f"⚡ Lazy loading: {lazy_time:.2f}s ({lazy_count} elements)")
 	print(f"🐌 Full loading: {full_time:.2f}s ({full_count} elements)")
 	print(f"🚀 Cache hit: {cache_time:.2f}s")
@@ -120,7 +121,7 @@ def test_performance_optimizations_v2():
 	print(f"📊 Cache improvement: {cache_improvement:.1f}% faster")
 	
 	# Test Nueva carpeta visibility
-	print(f"\n🔍 Testing Nueva carpeta button visibility...")
+	print("\n🔍 Testing Nueva carpeta button visibility...")
 	def find_nueva_carpeta(node):
 		if (node['element']['role'] == 'AXButton' and 
 			node['element']['attributes'].get('title') == 'Nueva carpeta'):
@@ -135,16 +136,16 @@ def test_performance_optimizations_v2():
 	else:
 		print("❌ Nueva carpeta button missing from lazy tree")
 
-	print(f"\n🎯 Optimization Summary:")
+	print("\n🎯 Optimization Summary:")
 	print(f"✅ Lazy loading implemented - {improvement:.1f}% faster initial load")
-	print(f"✅ Aggressive depth/children limits - reduced tree size")
-	print(f"✅ Interactive filtering - focused on actionable elements")
+	print("✅ Aggressive depth/children limits - reduced tree size")
+	print("✅ Interactive filtering - focused on actionable elements")
 	print(f"✅ Smart caching - {cache_improvement:.1f}% faster subsequent loads")
-	print(f"✅ Performance monitoring - detailed stats available")
-	print(f"✅ Element expansion API - on-demand loading capability")
+	print("✅ Performance monitoring - detailed stats available")
+	print("✅ Element expansion API - on-demand loading capability")
 	
-	print(f"\n🎉 v2.0 optimizations successfully tested!")
-	print(f"Expected improvements: 50-80% faster tree loading")
+	print("\n🎉 v2.0 optimizations successfully tested!")
+	print("Expected improvements: 50-80% faster tree loading")
 	print(f"Actual improvement: {improvement:.1f}% faster than full load")
 
 def count_elements(node):

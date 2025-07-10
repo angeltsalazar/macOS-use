@@ -1,5 +1,7 @@
-import requests
 import logging
+
+import requests
+
 
 def send_prompt_to_google_sheet(prompt: str, terminal_output: str = None) -> bool:
     """

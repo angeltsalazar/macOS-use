@@ -3,8 +3,10 @@
 Final comprehensive test of the UI Tree Explorer
 """
 
-import requests
 import time
+
+import requests
+
 
 def final_test():
 	"""Comprehensive test of all functionality"""
@@ -115,7 +117,7 @@ def final_test():
 		
 		# Test 6: Cache clearing
 		print("\n6️⃣  Testing cache management...")
-		response = requests.post(f"http://localhost:8000/api/cache/clear")
+		response = requests.post("http://localhost:8000/api/cache/clear")
 		if response.status_code == 200:
 			result = response.json()
 			print(f"✅ Cache cleared: {result['message']}")

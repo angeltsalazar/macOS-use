@@ -3,8 +3,9 @@
 Test that non-interactive AXRow and AXTable elements are filtered out
 """
 
+
 import requests
-import json
+
 
 def test_row_filtering():
 	"""Test that non-interactive display elements are filtered out"""
@@ -87,12 +88,12 @@ def test_row_filtering():
 		interactive_counts = count_elements_by_type(interactive_tree)
 		interactive_problematic = find_problematic_elements(interactive_tree)
 		
-		print(f"✅ Interactive tree loaded successfully")
+		print("✅ Interactive tree loaded successfully")
 		print(f"📊 Total elements: {interactive_counts['total']}")
 		print(f"🟢 Interactive elements: {interactive_counts['interactive']}")
 		print(f"⚪ Non-interactive elements: {interactive_counts['non_interactive']}")
 		
-		print(f"\n🚫 Problematic non-interactive display elements found:")
+		print("\n🚫 Problematic non-interactive display elements found:")
 		if interactive_problematic:
 			for elem in interactive_problematic[:5]:  # Show first 5
 				print(f"   ❌ {elem['role']} at {elem['element_path']}")
@@ -103,7 +104,7 @@ def test_row_filtering():
 			print("   ✅ No problematic elements found!")
 			
 		# Show element type breakdown
-		print(f"\n📋 Element types in interactive mode:")
+		print("\n📋 Element types in interactive mode:")
 		for role, count in sorted(interactive_counts['by_role'].items()):
 			if count > 0:
 				print(f"   {role}: {count}")
@@ -121,7 +122,7 @@ def test_row_filtering():
 		all_counts = count_elements_by_type(all_tree)
 		all_problematic = find_problematic_elements(all_tree)
 		
-		print(f"✅ All elements tree loaded successfully")
+		print("✅ All elements tree loaded successfully")
 		print(f"📊 Total elements: {all_counts['total']}")
 		print(f"🟢 Interactive elements: {all_counts['interactive']}")
 		print(f"⚪ Non-interactive elements: {all_counts['non_interactive']}")
@@ -150,7 +151,7 @@ def test_row_filtering():
 		return False
 
 	# Summary
-	print(f"\n📈 Filtering Results:")
+	print("\n📈 Filtering Results:")
 	print(f"🟢 Interactive mode: {interactive_counts['total']} total elements")
 	print(f"🚫 Problematic elements: {len(interactive_problematic)}")
 	improvement = len(interactive_problematic)
@@ -158,9 +159,9 @@ def test_row_filtering():
 		print(f"⚠️ Still showing {improvement} non-interactive display elements")
 		print("🔧 Consider further filtering refinement")
 	else:
-		print(f"✅ Successfully filtered out all non-interactive display elements!")
+		print("✅ Successfully filtered out all non-interactive display elements!")
 	
-	print(f"\n💡 Filtering improvements:")
+	print("\n💡 Filtering improvements:")
 	print("✅ AXRow elements excluded (unless interactive)")
 	print("✅ AXCell elements excluded (unless interactive)")  
 	print("✅ AXTable elements excluded (unless interactive)")

@@ -1,50 +1,28 @@
+import asyncio
 import os
 import sys
 
-from langchain_anthropic import ChatAnthropic
-from langchain_openai import ChatOpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI
-
-
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import argparse
-import asyncio
 
 from mlx_use import Agent
-from pydantic import SecretStr
 from mlx_use.controller.service import Controller
+from mlx_use.mac.llm_utils import get_available_providers, get_default_provider, set_llm
 
+# Use default provider or fallback to google
+# default_provider = 'lmstudio' 
+default_provider = get_default_provider() or 'google'
 
-def set_llm(llm_provider:str = None):
-	if not llm_provider:
-		raise ValueError("No llm provider was set")
-	
-	if llm_provider == "OAI":
-		api_key = os.getenv('OPENAI_API_KEY')
-		return ChatOpenAI(model='gpt-4o', api_key=SecretStr(api_key))
+llm = set_llm(default_provider)
 
-	if llm_provider == "github":
-		api_key = os.getenv('GITHUB_TOKEN')
-		return ChatOpenAI(model='gpt-4o', base_url="https://models.inference.ai.azure.com", api_key=SecretStr(api_key))
-
-	if llm_provider == "grok":
-		api_key = os.getenv('XAI_API_KEY')
-		return ChatOpenAI(model='grok-2', base_url="https://api.x.ai/v1", api_key=SecretStr(api_key))
-
-	if llm_provider == "google":
-		api_key = os.getenv('GEMINI_API_KEY')
-		return ChatGoogleGenerativeAI(model='gemini-2.5-pro',  api_key=SecretStr(api_key))
-	
-llm = set_llm('google')
-# llm = set_llm('OAI')
-# llm = set_llm('github')
-# llm = set_llm('grok')
+print(f"📊 Using LLM provider: {default_provider}")
+print(f"📋 Available providers: {get_available_providers()}")
 
 controller = Controller()
 
 task = 'calculate how much is 5 X 4 and return the result, then call done.'
 
 
+# Configure agent with higher max_depth for Calculator app
 agent = Agent(
 	task=task,
 	llm=llm,
@@ -53,9 +31,18 @@ agent = Agent(
 	max_actions_per_step=10,
 )
 
+# Monkey-patch the tree builder to use higher depth for Calculator
+original_build_tree = agent.mac_tree_builder.build_tree
+
+async def build_tree_with_higher_depth(pid, force_refresh=False, lazy_mode=True):
+    # Use higher depth for better element discovery
+    return await original_build_tree(pid, force_refresh=force_refresh, lazy_mode=False, max_depth=10)
+
+agent.mac_tree_builder.build_tree = build_tree_with_higher_depth
+
 
 async def main():
-	await agent.run(max_steps=25)
+	await agent.run(max_steps=10)
 
 
 asyncio.run(main())

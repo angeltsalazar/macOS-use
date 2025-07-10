@@ -1,26 +1,28 @@
 import asyncio
-import json
 import logging
-from typing import Literal
 import subprocess
+from typing import Literal, Union
 
 import Cocoa
-from playwright.async_api import Page
 
 from mlx_use.agent.views import ActionModel, ActionResult
 from mlx_use.controller.registry.service import Registry
 from mlx_use.controller.views import (
+	AppleScriptAction,
+	ClickElementAction,
 	DoneAction,
 	InputTextAction,
-	ClickElementAction,
 	OpenAppAction,
 	RightClickElementAction,
-	AppleScriptAction,
-	ScrollElementAction
+	ScrollElementAction,
 )
-from mlx_use.mac.actions import click, type_into, right_click, scroll
+from mlx_use.mac.actions import click, right_click, scroll, type_into
+from mlx_use.mac.optimized_tree import OptimizedTreeManager
 from mlx_use.mac.tree import MacUITreeBuilder
 from mlx_use.utils import time_execution_async, time_execution_sync
+
+# Type alias for tree builders that support the required interface
+TreeBuilder = Union[MacUITreeBuilder, OptimizedTreeManager]
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +49,7 @@ class Controller:
 				'Input text', 
 				param_model=InputTextAction,
 				requires_mac_builder=True)
-		async def input_text(index: int, text: str, submit: bool, mac_tree_builder: MacUITreeBuilder):
+		async def input_text(index: int, text: str, submit: bool, mac_tree_builder: TreeBuilder):
 			logger.debug(f'Inputting text {text} into element with index {index}')
 
 			try:
@@ -76,7 +78,7 @@ class Controller:
 				'Click element and choose action',
 				param_model=ClickElementAction,
 				  requires_mac_builder=True)
-		async def click_element(index: int, action: str, mac_tree_builder: MacUITreeBuilder):
+		async def click_element(index: int, action: str, mac_tree_builder: TreeBuilder):
 			logger.debug(f'Clicking element {index}')
 
 			try:
@@ -113,7 +115,7 @@ class Controller:
 			param_model=RightClickElementAction,
 			requires_mac_builder=True
 		)
-		async def right_click_element(index: int, mac_tree_builder: MacUITreeBuilder):
+		async def right_click_element(index: int, mac_tree_builder: TreeBuilder):
 			logger.debug(f'Right clicking element {index}')
 			try:
 				if index in mac_tree_builder._element_cache:
@@ -142,7 +144,7 @@ class Controller:
 			param_model=ScrollElementAction,
 			requires_mac_builder=True
 		)
-		async def scroll_element(index: int, direction: Literal['up', 'down', 'left', 'right'], mac_tree_builder: MacUITreeBuilder):
+		async def scroll_element(index: int, direction: Literal['up', 'down', 'left', 'right'], mac_tree_builder: TreeBuilder):
 			logger.debug(f'Scrolling element {index} {direction}')
 			try:
 				if index in mac_tree_builder._element_cache:
@@ -273,7 +275,7 @@ class Controller:
 
 	@time_execution_async('--multi-act')
 	async def multi_act(
-		self, actions: list[ActionModel], mac_tree_builder: MacUITreeBuilder, check_for_new_elements: bool = True
+		self, actions: list[ActionModel], mac_tree_builder: TreeBuilder, check_for_new_elements: bool = True
 	) -> list[ActionResult]:
 		"""Execute multiple actions"""
 		results = []
@@ -288,7 +290,7 @@ class Controller:
 		return results
 
 	@time_execution_sync('--act')
-	async def act(self, action: ActionModel, mac_tree_builder: MacUITreeBuilder) -> ActionResult:
+	async def act(self, action: ActionModel, mac_tree_builder: TreeBuilder) -> ActionResult:
 		"""Execute an action"""
 		try:
 			for action_name, params in action.model_dump(exclude_unset=True).items():

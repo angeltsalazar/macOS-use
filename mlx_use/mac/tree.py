@@ -1,22 +1,16 @@
 # --- START OF FILE mac_use/mac/tree.py ---
-import asyncio
 
 # --- START OF FILE mac_use/mac/actions.py ---
 import logging
-from typing import Callable, Dict, List, Optional
+from typing import List, Optional
 
-import Cocoa
-from ApplicationServices import AXUIElementPerformAction, AXUIElementSetAttributeValue, kAXPressAction, kAXValueAttribute
-from Foundation import NSString
+from ApplicationServices import kAXValueAttribute
 
 from mlx_use.mac.element import MacElementNode
 
 logger = logging.getLogger(__name__)
 
-import Cocoa
-import objc
 from ApplicationServices import (
-	AXError,
 	AXUIElementCopyActionNames,
 	AXUIElementCopyAttributeValue,
 	AXUIElementCreateApplication,
@@ -24,17 +18,12 @@ from ApplicationServices import (
 	kAXDescriptionAttribute,
 	kAXErrorAPIDisabled,
 	kAXErrorAttributeUnsupported,
-	kAXErrorCannotComplete,
-	kAXErrorFailure,
-	kAXErrorIllegalArgument,
 	kAXErrorSuccess,
 	kAXMainWindowAttribute,
 	kAXRoleAttribute,
 	kAXTitleAttribute,
-	kAXValueAttribute,
 	kAXWindowsAttribute,
 )
-from CoreFoundation import CFRunLoopAddSource, CFRunLoopGetCurrent, kCFRunLoopDefaultMode
 
 from .element import MacElementNode
 
@@ -88,7 +77,7 @@ class MacUITreeBuilder:
 			else:
 				# logger.debug(f"Error getting attribute '{attribute}': {error}")
 				return None
-		except Exception as e:
+		except Exception:
 			# logger.debug(f"Exception getting attribute '{attribute}': {str(e)}")
 			return None
 
@@ -299,7 +288,7 @@ class MacUITreeBuilder:
 				if error == kAXErrorAPIDisabled:
 					logger.error('Accessibility is not enabled. Please enable it in System Settings.')
 				elif error == -25204:
-					logger.error(f'Error -25204: Accessibility connection failed. The app may have been closed or restarted.')
+					logger.error('Error -25204: Accessibility connection failed. The app may have been closed or restarted.')
 					# Reset current app PID as it's no longer valid
 					self._current_app_pid = None
 					# Force cleanup to release any hanging references

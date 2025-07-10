@@ -7,24 +7,17 @@ and improved visual feedback for search results.
 """
 
 import asyncio
-import logging
-import os
 import json
+import logging
 import time
-import hashlib
-from typing import Optional, List, Dict, Any, Tuple
-from dataclasses import asdict
-from functools import lru_cache
-import threading
+from typing import Any, Dict, List, Optional
 
 import Cocoa
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, BackgroundTasks
-from fastapi.staticfiles import StaticFiles
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from mlx_use.mac.tree import MacUITreeBuilder
-from mlx_use.mac.element import MacElementNode
+from mlx_use.mac.optimized_tree import OptimizedTreeManager
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -36,67 +29,8 @@ TREE_NOT_AVAILABLE_ERROR = "Tree not available"
 
 app = FastAPI(title="macOS UI Tree Explorer - Optimized", version="0.2.1")
 
-# Enhanced global state with caching
-class AppTreeCache:
-	def __init__(self):
-		self.trees: Dict[int, MacElementNode] = {}
-		self.elements_flat: Dict[int, List[ElementInfo]] = {}
-		self.search_cache: Dict[str, List[ElementInfo]] = {}
-		self.last_updated: Dict[int, float] = {}
-		self.builders: Dict[int, MacUITreeBuilder] = {}
-		# New: Incremental loading cache
-		self.partial_trees: Dict[str, MacElementNode] = {}  # key: f"{pid}:{path}"
-		self.element_checksums: Dict[str, str] = {}  # For differential updates
-		self.lock = threading.Lock()
-	
-	def get_builder(self, pid: int) -> MacUITreeBuilder:
-		"""Get or create builder for PID with aggressive performance optimizations"""
-		if pid not in self.builders:
-			self.builders[pid] = MacUITreeBuilder()
-			# Aggressive performance optimizations based on research
-			self.builders[pid].max_children = 50   # Reduced from 100
-			self.builders[pid].max_depth = 4       # Reduced from 8 for initial load
-		return self.builders[pid]
-	
-	def invalidate(self, pid: int):
-		"""Invalidate cache for specific PID"""
-		with self.lock:
-			self.trees.pop(pid, None)
-			self.elements_flat.pop(pid, None)
-			self.last_updated.pop(pid, None)
-			# Clear search cache entries for this PID
-			keys_to_remove = [k for k in self.search_cache.keys() if k.startswith(f"{pid}:")]
-			for key in keys_to_remove:
-				del self.search_cache[key]
-	
-	def cleanup_builder(self, pid: int):
-		"""Cleanup builder resources"""
-		if pid in self.builders:
-			self.builders[pid].cleanup()
-			del self.builders[pid]
-	
-	def get_element_key(self, pid: int, element_path: str) -> str:
-		"""Generate cache key for partial tree element"""
-		return f"{pid}:{element_path}"
-	
-	def should_load_children(self, element: 'MacElementNode', current_depth: int, max_depth: int) -> bool:
-		"""Determine if children should be loaded based on performance heuristics"""
-		# Always load interactive elements and important containers
-		if element.is_interactive:
-			return current_depth < max_depth
-		
-		# Load children for structural containers up to limited depth
-		if element.role in ['AXWindow', 'AXGroup', 'AXScrollArea', 'AXSplitGroup', 'AXTabGroup', 'AXToolbar']:
-			return current_depth < min(max_depth, 3)  # Limit structural depth
-		
-		# Skip loading children for display-only elements
-		if element.role in ['AXRow', 'AXCell', 'AXTable', 'AXStaticText']:
-			return False
-		
-		return current_depth < 2  # Very conservative for other elements
-
-# Global cache instance
-cache = AppTreeCache()
+# Global tree manager instance
+tree_manager = OptimizedTreeManager()
 
 # Pydantic models
 class AppInfo(BaseModel):
@@ -118,7 +52,7 @@ class ElementInfo(BaseModel):
 	parent_path: Optional[str] = None
 
 class TreeNode(BaseModel):
-	element: ElementInfo
+	element: Dict[str, Any]  # Changed from ElementInfo to Dict since optimized_tree returns dicts
 	children: List['TreeNode'] = []
 	is_expanded: bool = False
 
@@ -128,7 +62,7 @@ class QueryRequest(BaseModel):
 	case_sensitive: bool = False
 
 class ElementSearchResult(BaseModel):
-	elements: List[ElementInfo]
+	elements: List[Dict[str, Any]]  # Changed from ElementInfo to Dict
 	total_count: int
 	search_time: float
 	highlighted_paths: List[str] = []
@@ -140,97 +74,6 @@ class TreeExplorationRequest(BaseModel):
 # Update forward references
 TreeNode.model_rebuild()
 
-def _sanitize_value(value: Any) -> Any:
-	"""Sanitize a single value for JSON serialization"""
-	if value is None:
-		return None
-	elif isinstance(value, (str, int, float, bool)):
-		return value
-	elif isinstance(value, (list, tuple)):
-		return [_sanitize_value(item) for item in value]
-	elif isinstance(value, dict):
-		return {k: _sanitize_value(v) for k, v in value.items()}
-	else:
-		# Convert any other type to string
-		return str(value)
-
-def _sanitize_attributes(attributes: Dict[str, Any]) -> Dict[str, Any]:
-	"""Sanitize attributes to ensure JSON serializability"""
-	sanitized = {}
-	for key, value in attributes.items():
-		try:
-			# Test JSON serializability
-			json.dumps(value)
-			sanitized[key] = value
-		except (TypeError, ValueError):
-			# Use our sanitization function
-			sanitized[key] = _sanitize_value(value)
-	return sanitized
-
-def _convert_element_to_info(element: MacElementNode, parent_path: str = None) -> ElementInfo:
-	"""Convert MacElementNode to ElementInfo with parent context"""
-	# Sanitize attributes to ensure JSON serializability
-	clean_attributes = _sanitize_attributes(element.attributes)
-	
-	return ElementInfo(
-		role=element.role,
-		identifier=element.identifier,
-		attributes=clean_attributes,
-		is_visible=element.is_visible,
-		is_interactive=element.is_interactive,
-		highlight_index=element.highlight_index,
-		actions=element.actions,
-		children_count=len(element.children),
-		path=element.accessibility_path,
-		parent_path=parent_path
-	)
-
-# Constants for filtering
-EXCLUDE_ROLES = ['AXRow', 'AXCell', 'AXTable', 'AXColumn', 'AXColumnHeader']
-CONTAINER_ROLES = ['AXWindow', 'AXGroup', 'AXScrollArea', 'AXSplitGroup', 'AXTabGroup', 'AXToolbar', 'AXPopUpButton', 'AXMenuBar', 'AXOutline']
-
-def _has_interactive_descendants(node: MacElementNode, max_depth: int = 2, current_depth: int = 0) -> bool:
-	"""Check if node has interactive descendants within depth limit"""
-	if current_depth >= max_depth:
-		return False
-	
-	for grandchild in node.children:
-		# Skip checking excluded display elements
-		if grandchild.role in EXCLUDE_ROLES and not grandchild.is_interactive:
-			continue
-		if grandchild.is_interactive:
-			return True
-		if grandchild.children and _has_interactive_descendants(grandchild, max_depth, current_depth + 1):
-			return True
-	return False
-
-def _should_include_child(child: MacElementNode) -> bool:
-	"""Determine if a child element should be included in interactive filtering"""
-	# EXCLUDE display-only elements that are not interactive
-	if child.role in EXCLUDE_ROLES and not child.is_interactive:
-		return False
-	
-	# Include if child is directly interactive
-	if child.is_interactive:
-		return True
-	
-	# Include important container roles
-	if child.role in CONTAINER_ROLES:
-		return True
-	
-	# Include if has interactive descendants
-	if child.children and _has_interactive_descendants(child):
-		return True
-	
-	return False
-
-def _filter_children_for_interactive(children: list) -> list:
-	"""Filter children to include only interactive or structurally important elements"""
-	filtered_children = []
-	for child in children:
-		if _should_include_child(child):
-			filtered_children.append(child)
-	return filtered_children[:50]  # Limit for performance
 
 # App filtering helper functions
 def _should_include_apple_app(bundle_id: str) -> bool:
@@ -260,80 +103,6 @@ def _get_app_sort_key(app: AppInfo) -> tuple:
 		return (0, app.name.lower())  # Highest priority
 	return (1 if not app.is_active else 0, app.name.lower())
 
-# Element expansion helper functions
-def _find_element_by_path(node: MacElementNode, target_path: str) -> Optional[MacElementNode]:
-	"""Recursively find element by accessibility path"""
-	if node.accessibility_path == target_path:
-		return node
-	for child in node.children:
-		result = _find_element_by_path(child, target_path)
-		if result:
-			return result
-	return None
-
-async def _expand_element_with_builder(builder, element: MacElementNode, pid: int) -> Optional[MacElementNode]:
-	"""Expand element using builder with deeper traversal"""
-	original_max_depth = builder.max_depth
-	builder.max_depth = 8  # Allow deeper expansion
-	
-	try:
-		return await builder._process_element(element._element_ref, pid, element.parent, 0)
-	finally:
-		builder.max_depth = original_max_depth
-
-def _create_expansion_response(element: MacElementNode) -> dict:
-	"""Create response for element expansion"""
-	element_info = _convert_element_to_info(element)
-	children = [_convert_tree_to_json_incremental(child, 3, interactive_only=True) 
-			   for child in element.children]
-	
-	return {
-		"element": element_info,
-		"children": children,
-		"expanded": True
-	}
-
-# Search helper functions
-def _normalize_search_query(query: str, case_sensitive: bool) -> str:
-	"""Normalize search query for comparison"""
-	query = query.strip()
-	return query if case_sensitive else query.lower()
-
-def _extract_searchable_text(element: ElementInfo, case_sensitive: bool) -> str:
-	"""Extract searchable text from element"""
-	searchable_parts = []
-	
-	# Add role
-	if element.role:
-		searchable_parts.append(str(element.role))
-	
-	# Add relevant attributes
-	for attr_key in ['title', 'value', 'description', 'label', 'placeholder']:
-		attr_value = element.attributes.get(attr_key)
-		if attr_value:
-			sanitized = _sanitize_value(attr_value)
-			if sanitized and str(sanitized).strip():
-				searchable_parts.append(str(sanitized))
-	
-	# Add actions
-	if element.actions:
-		searchable_parts.extend(element.actions)
-	
-	# Join and normalize
-	searchable_text = " ".join(searchable_parts)
-	return searchable_text if case_sensitive else searchable_text.lower()
-
-def _should_log_debug_info(element: ElementInfo, debug_count: int) -> bool:
-	"""Check if element should be logged for debugging"""
-	return element.role == 'AXButton' and debug_count < 5
-
-def _create_search_result(matching_elements: List[ElementInfo], search_time: float) -> ElementSearchResult:
-	"""Create search result response"""
-	return ElementSearchResult(
-		elements=matching_elements,
-		total_count=len(matching_elements),
-		search_time=search_time
-	)
 
 # Text input helper functions
 def _find_supported_text_input_action(element_actions: List[str]) -> Optional[str]:
@@ -360,9 +129,10 @@ def _try_direct_value_setting(element, text: str) -> tuple[bool, str]:
 
 async def _try_click_then_set_value(element, text: str) -> tuple[bool, str]:
 	"""Try clicking element then setting value"""
-	from mlx_use.mac.actions import click
 	from ApplicationServices import AXUIElementSetAttributeValue, kAXValueAttribute
 	from Foundation import NSString
+
+	from mlx_use.mac.actions import click
 	
 	try:
 		click_result = click(element, 'AXConfirm')
@@ -452,98 +222,6 @@ def _create_text_input_response(success: bool, text: str, element, method_used: 
 			"message": f"Failed to type into {element.role}. Tried methods for {supported_action}."
 		}
 
-def _convert_tree_to_json_incremental(element: MacElementNode, max_depth: int = 2, current_depth: int = 0, parent_path: str = None, interactive_only: bool = True) -> TreeNode:
-	"""Convert tree with incremental loading support and interactive filtering"""
-	element_info = _convert_element_to_info(element, parent_path)
-	
-	children = []
-	is_expanded = current_depth < max_depth
-	
-	if is_expanded and element.children:
-		if interactive_only:
-			filtered_children = _filter_children_for_interactive(element.children)
-			children = [_convert_tree_to_json_incremental(child, max_depth, current_depth + 1, element.accessibility_path, interactive_only) 
-					   for child in filtered_children]
-		else:
-			# Show all elements (original behavior)
-			children = [_convert_tree_to_json_incremental(child, max_depth, current_depth + 1, element.accessibility_path, interactive_only) 
-					   for child in element.children[:20]]
-	
-	return TreeNode(element=element_info, children=children, is_expanded=is_expanded)
-
-@lru_cache(maxsize=128)
-def _get_cached_search_key(pid: int, query: str, case_sensitive: bool) -> str:
-	"""Generate cache key for search results"""
-	return f"{pid}:{hashlib.md5(f'{query}:{case_sensitive}'.encode()).hexdigest()}"
-
-async def _build_tree_cached(pid: int, force_refresh: bool = False, lazy_mode: bool = True) -> Optional[MacElementNode]:
-	"""Build tree with caching and lazy loading optimization"""
-	current_time = time.time()
-	
-	# Check if we have a recent cached version
-	if not force_refresh and pid in cache.trees:
-		last_update = cache.last_updated.get(pid, 0)
-		cache_age = current_time - last_update
-		if cache_age < 30:  # 30 second cache
-			logger.info(f"Using cached tree for PID {pid} (age: {cache_age:.1f}s)")
-			return cache.trees[pid]
-	
-	# Build new tree with performance optimizations
-	start_time = time.time()
-	logger.info(f"Building {'lazy' if lazy_mode else 'full'} tree for PID {pid}")
-	builder = cache.get_builder(pid)
-	
-	# Apply aggressive optimizations for lazy mode
-	if lazy_mode:
-		original_max_depth = builder.max_depth
-		original_max_children = builder.max_children
-		# Ultra-aggressive settings for initial load
-		builder.max_depth = 3      # Very shallow initial load
-		builder.max_children = 25  # Limit children per level
-	
-	try:
-		tree = await builder.build_tree(pid)
-		build_time = time.time() - start_time
-		
-		if tree:
-			with cache.lock:
-				cache.trees[pid] = tree
-				cache.last_updated[pid] = current_time
-				# Invalidate elements cache to force rebuild
-				cache.elements_flat.pop(pid, None)
-			
-			logger.info(f"Tree built successfully for PID {pid} in {build_time:.2f}s ({'lazy' if lazy_mode else 'full'} mode)")
-		return tree
-		
-	except Exception as e:
-		logger.error(f"Error building tree for PID {pid}: {e}")
-		return None
-	finally:
-		# Restore original settings
-		if lazy_mode:
-			builder.max_depth = original_max_depth
-			builder.max_children = original_max_children
-
-def _flatten_tree_cached(pid: int) -> List[ElementInfo]:
-	"""Get flattened elements with caching"""
-	if pid in cache.elements_flat:
-		return cache.elements_flat[pid]
-	
-	if pid not in cache.trees:
-		return []
-	
-	elements = []
-	def collect_elements(node: MacElementNode, parent_path: str = None):
-		elements.append(_convert_element_to_info(node, parent_path))
-		for child in node.children:
-			collect_elements(child, node.accessibility_path)
-	
-	collect_elements(cache.trees[pid])
-	
-	with cache.lock:
-		cache.elements_flat[pid] = elements
-	
-	return elements
 
 @app.get("/")
 async def read_root():
@@ -1477,84 +1155,41 @@ async def get_running_apps():
 		logger.error(f"Error getting running apps: {e}")
 		raise HTTPException(status_code=500, detail=str(e))
 
-def _check_quick_cache(pid: int, max_depth: int, interactive_only: bool) -> Optional[TreeNode]:
-	"""Check if quick cache can be used and return cached tree if available"""
-	if pid in cache.trees and pid in cache.last_updated:
-		age = time.time() - cache.last_updated[pid]
-		if age < 5:  # Use cache if less than 5 seconds old
-			logger.info(f"Using quick cache for PID {pid} (age: {age:.1f}s)")
-			return _convert_tree_to_json_incremental(cache.trees[pid], max_depth, interactive_only=interactive_only)
-	return None
-
-def _determine_max_depth(max_depth: int, interactive_only: bool) -> int:
-	"""Determine appropriate max_depth based on mode"""
-	if max_depth is None:
-		return 5 if interactive_only else 3
-	return max_depth
-
-def _log_tree_build_info(pid: int, interactive_only: bool, max_depth: int, lazy_mode: bool):
-	"""Log information about tree building parameters"""
-	if interactive_only:
-		logger.info(f"Building tree for PID {pid} with interactive-only filter (max_depth={max_depth}, lazy_mode={lazy_mode})")
-	else:
-		logger.info(f"Building tree for PID {pid} with all elements (max_depth={max_depth}, lazy_mode={lazy_mode})")
-
 @app.get("/api/apps/{pid}/tree", response_model=TreeNode)
 async def get_app_tree(pid: int, max_depth: int = None, force: bool = False, quick: bool = False, interactive_only: bool = True):
 	"""Get UI tree with caching and incremental loading, filtered for interactive elements by default"""
 	try:
 		# Set appropriate default max_depth based on mode
-		max_depth = _determine_max_depth(max_depth, interactive_only)
+		if max_depth is None:
+			max_depth = 5 if interactive_only else 3
 		
-		# Quick mode for faster refresh
-		if quick and not force:
-			cached_result = _check_quick_cache(pid, max_depth, interactive_only)
-			if cached_result:
-				return cached_result
-		
-		# Use lazy loading for better performance, except when explicitly requesting full tree
-		lazy_mode = not force  # Force refresh means full tree
-		tree = await _build_tree_cached(pid, force_refresh=force, lazy_mode=lazy_mode)
+		# Build tree using the optimized tree manager
+		tree = await tree_manager.build_tree(pid, force_refresh=force, lazy_mode=(not force))
 		if not tree:
 			raise HTTPException(status_code=404, detail="Could not build UI tree for application")
 		
-		# Log filtering info
-		_log_tree_build_info(pid, interactive_only, max_depth, lazy_mode)
+		# Get tree in JSON format
+		tree_json = tree_manager.get_tree_json(pid, max_depth, interactive_only)
+		if not tree_json:
+			raise HTTPException(status_code=404, detail="Could not convert tree to JSON")
 		
-		return _convert_tree_to_json_incremental(tree, max_depth, interactive_only=interactive_only)
+		return TreeNode(**tree_json)
 		
 	except Exception as e:
 		logger.error(f"Error building tree for PID {pid}: {e}")
 		# Clean up on error
-		cache.cleanup_builder(pid)
-		cache.invalidate(pid)
+		tree_manager.cleanup(pid)
 		raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/apps/{pid}/expand")
 async def expand_element(pid: int, element_path: str):
 	"""Expand a specific element to load its children on-demand"""
 	try:
-		# Get cached tree
-		if pid not in cache.trees:
-			raise HTTPException(status_code=404, detail=f"{TREE_NOT_AVAILABLE_ERROR}. Load tree first.")
-		
-		tree = cache.trees[pid]
-		
-		# Find the element to expand
-		element = _find_element_by_path(tree, element_path)
-		if not element:
+		result = await tree_manager.expand_element(pid, element_path)
+		if not result:
 			raise HTTPException(status_code=404, detail=ELEMENT_NOT_FOUND_ERROR)
 		
-		# Build deeper tree for this element using full depth
-		builder = cache.get_builder(pid)
-		expanded_element = await _expand_element_with_builder(builder, element, pid)
-		
-		if expanded_element:
-			# Replace the element in the tree
-			element.children = expanded_element.children
-			return _create_expansion_response(element)
-		
-		raise HTTPException(status_code=500, detail="Failed to expand element")
+		return result
 		
 	except Exception as e:
 		logger.error(f"Error expanding element for PID {pid}: {e}")
@@ -1564,86 +1199,12 @@ async def expand_element(pid: int, element_path: str):
 async def search_elements_optimized(pid: int, q: str, case_sensitive: bool = False):
 	"""Optimized search with caching"""
 	try:
-		start_time = time.time()
-		
-		# Normalize query for better matching
-		original_query = q
-		query = _normalize_search_query(q, case_sensitive)
-		
-		logger.info(f"Search request: '{original_query}' -> normalized: '{query}' (case_sensitive: {case_sensitive})")
-		
-		# Check cache first
-		cache_key = _get_cached_search_key(pid, query, case_sensitive)
-		if cache_key in cache.search_cache:
-			cached_results = cache.search_cache[cache_key]
-			search_time = time.time() - start_time
-			logger.info(f"Cache hit for search '{query}': {len(cached_results)} results")
-			return _create_search_result(cached_results, search_time)
-		
-		# Ensure we have tree data
-		await _build_tree_cached(pid)
-		elements = _flatten_tree_cached(pid)
-		
-		logger.info(f"Searching through {len(elements)} elements for '{query}'")
-		
-		matching_elements = []
-		debug_count = 0
-		
-		for element in elements:
-			# Extract searchable text from element
-			searchable_text = _extract_searchable_text(element, case_sensitive)
-			
-			# Debug logging for buttons
-			if _should_log_debug_info(element, debug_count):
-				logger.info(f"Button {debug_count}: '{searchable_text}' (searching for: '{query}')")
-				debug_count += 1
-			
-			# Check for match
-			if query in searchable_text:
-				matching_elements.append(element)
-				logger.info(f"MATCH found: {element.role} - '{element.attributes.get('title', 'No title')}'")
-		
-		logger.info(f"Search completed: {len(matching_elements)} matches for '{query}'")
-		
-		# Cache results
-		with cache.lock:
-			cache.search_cache[cache_key] = matching_elements
-		
-		search_time = time.time() - start_time
-		return _create_search_result(matching_elements, search_time)
+		result = await tree_manager.search_elements(pid, q, case_sensitive)
+		return ElementSearchResult(**result)
 		
 	except Exception as e:
 		logger.error(f"Error searching elements: {e}")
 		raise HTTPException(status_code=500, detail=str(e))
-
-def _extract_query_target(element: ElementInfo, query_type: str) -> str:
-	"""Extract target text from element based on query type"""
-	if query_type == "role":
-		return element.role
-	elif query_type == "title":
-		return _sanitize_value(element.attributes.get('title', ''))
-	elif query_type == "action":
-		return " ".join(element.actions)
-	elif query_type == "text":
-		parts = [
-			element.role,
-			_sanitize_value(element.attributes.get('title', '')),
-			_sanitize_value(element.attributes.get('value', '')),
-			_sanitize_value(element.attributes.get('description', ''))
-		]
-		return " ".join(str(part) for part in parts if part)
-	else:  # custom
-		try:
-			return json.dumps(element.dict())
-		except (TypeError, ValueError):
-			return str(element.dict())
-
-def _normalize_query_target(target: str, query_value: str, case_sensitive: bool) -> tuple[str, str]:
-	"""Normalize target and query for comparison"""
-	target = str(target)
-	if not case_sensitive:
-		return target.lower(), query_value.lower()
-	return target, query_value
 
 @app.post("/api/apps/{pid}/query", response_model=ElementSearchResult)
 async def query_elements_optimized(pid: int, query: QueryRequest):
@@ -1651,13 +1212,35 @@ async def query_elements_optimized(pid: int, query: QueryRequest):
 	try:
 		start_time = time.time()
 		
-		await _build_tree_cached(pid)
-		elements = _flatten_tree_cached(pid)
+		await tree_manager.build_tree(pid)
+		elements = tree_manager.get_flattened_elements(pid)
 		matching_elements = []
 		
 		for element in elements:
-			target = _extract_query_target(element, query.query_type)
-			target, search_value = _normalize_query_target(target, query.query_value, query.case_sensitive)
+			# Extract target text based on query type
+			if query.query_type == "role":
+				target = element.get("role", "")
+			elif query.query_type == "title":
+				target = str(element.get("attributes", {}).get("title", ""))
+			elif query.query_type == "action":
+				target = " ".join(element.get("actions", []))
+			elif query.query_type == "text":
+				parts = [
+					element.get("role", ""),
+					str(element.get("attributes", {}).get("title", "")),
+					str(element.get("attributes", {}).get("value", "")),
+					str(element.get("attributes", {}).get("description", ""))
+				]
+				target = " ".join(str(part) for part in parts if part)
+			else:  # custom
+				target = json.dumps(element)
+			
+			# Normalize for comparison
+			if not query.case_sensitive:
+				target = target.lower()
+				search_value = query.query_value.lower()
+			else:
+				search_value = query.query_value
 			
 			if search_value in target:
 				matching_elements.append(element)
@@ -1673,13 +1256,12 @@ async def query_elements_optimized(pid: int, query: QueryRequest):
 		logger.error(f"Error querying elements: {e}")
 		raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/apps/{pid}/interactive", response_model=List[ElementInfo])
+@app.get("/api/apps/{pid}/interactive")
 async def get_interactive_elements_cached(pid: int):
 	"""Get interactive elements with caching"""
 	try:
-		await _build_tree_cached(pid)
-		elements = _flatten_tree_cached(pid)
-		interactive_elements = [el for el in elements if el.is_interactive]
+		await tree_manager.build_tree(pid)
+		interactive_elements = tree_manager.get_interactive_elements(pid)
 		return interactive_elements
 		
 	except Exception as e:
@@ -1731,12 +1313,10 @@ async def execute_action(pid: int, request: ActionRequest):
 	"""Execute an action on a UI element"""
 	try:
 		# Ensure we have current tree
-		await _build_tree_cached(pid)
-		if pid not in cache.trees:
-			raise HTTPException(status_code=404, detail=TREE_NOT_AVAILABLE_ERROR)
+		await tree_manager.build_tree(pid)
 		
 		# Find element by path
-		target_element = cache.trees[pid].find_element_by_path(request.element_path)
+		target_element = tree_manager.find_element_by_path(pid, request.element_path)
 		if not target_element:
 			raise HTTPException(status_code=404, detail=ELEMENT_NOT_FOUND_ERROR)
 		
@@ -1748,7 +1328,7 @@ async def execute_action(pid: int, request: ActionRequest):
 			)
 		
 		# Import action functions
-		from mlx_use.mac.actions import click, type_into
+		from mlx_use.mac.actions import click
 		
 		# Execute the action
 		result = False
@@ -1762,7 +1342,7 @@ async def execute_action(pid: int, request: ActionRequest):
 		
 		if result:
 			# Invalidate cache after action to get fresh tree
-			cache.invalidate(pid)
+			tree_manager.invalidate_cache(pid)
 			return {
 				"status": "success", 
 				"message": f"Action '{request.action}' executed on {target_element.role}",
@@ -1787,12 +1367,10 @@ async def type_text(pid: int, request: TypeRequest):
 	"""Type text into a UI element"""
 	try:
 		# Ensure we have current tree
-		await _build_tree_cached(pid)
-		if pid not in cache.trees:
-			raise HTTPException(status_code=404, detail=TREE_NOT_AVAILABLE_ERROR)
+		await tree_manager.build_tree(pid)
 		
 		# Find element by path
-		target_element = cache.trees[pid].find_element_by_path(request.element_path)
+		target_element = tree_manager.find_element_by_path(pid, request.element_path)
 		if not target_element:
 			raise HTTPException(status_code=404, detail=ELEMENT_NOT_FOUND_ERROR)
 		
@@ -1822,7 +1400,7 @@ async def type_text(pid: int, request: TypeRequest):
 		
 		if result:
 			# Invalidate cache after typing to get fresh tree
-			cache.invalidate(pid)
+			tree_manager.invalidate_cache(pid)
 		
 		return _create_text_input_response(result, request.text, target_element, method_used, supported_action)
 			
@@ -1835,17 +1413,15 @@ async def get_element_by_index(pid: int, highlight_index: int):
 	"""Get element details by highlight index"""
 	try:
 		# Ensure we have current tree
-		await _build_tree_cached(pid)
-		if pid not in cache.trees:
-			raise HTTPException(status_code=404, detail=TREE_NOT_AVAILABLE_ERROR)
+		await tree_manager.build_tree(pid)
 		
-		# Find element by highlight index
-		builder = cache.get_builder(pid)
-		if highlight_index not in builder._element_cache:
-			raise HTTPException(status_code=404, detail=f"Element with index {highlight_index} not found")
+		# Find element by highlight index from flattened elements
+		elements = tree_manager.get_flattened_elements(pid)
+		for element in elements:
+			if element.get("highlight_index") == highlight_index:
+				return element
 		
-		element = builder._element_cache[highlight_index]
-		return _convert_element_to_info(element)
+		raise HTTPException(status_code=404, detail=f"Element with index {highlight_index} not found")
 		
 	except Exception as e:
 		logger.error(f"Error getting element by index: {e}")
@@ -1855,35 +1431,7 @@ async def get_element_by_index(pid: int, highlight_index: int):
 async def get_performance_stats():
 	"""Get performance statistics and cache information"""
 	try:
-		with cache.lock:
-			current_time = time.time()
-			stats = {
-				"cache_stats": {
-					"trees_cached": len(cache.trees),
-					"search_cache_size": len(cache.search_cache),
-					"elements_flat_cached": len(cache.elements_flat),
-					"partial_trees_cached": len(cache.partial_trees)
-				},
-				"tree_ages": {
-					str(pid): round(current_time - last_updated, 1)
-					for pid, last_updated in cache.last_updated.items()
-				},
-				"optimization_settings": {
-					"default_max_depth_interactive": 5,
-					"default_max_depth_all": 3,
-					"lazy_load_max_depth": 3,
-					"lazy_load_max_children": 25,
-					"cache_expiry_seconds": 30
-				},
-				"memory_optimization": {
-					"interactive_filtering": True,
-					"lazy_loading": True,
-					"differential_updates": False,  # Not implemented yet
-					"async_processing": False      # Not implemented yet
-				}
-			}
-		
-		return stats
+		return tree_manager.get_performance_stats()
 	except Exception as e:
 		logger.error(f"Error getting performance stats: {e}")
 		raise HTTPException(status_code=500, detail=str(e))
@@ -1892,22 +1440,7 @@ async def get_performance_stats():
 async def clear_caches():
 	"""Clear all caches"""
 	try:
-		# Cleanup all builders
-		for pid in cache.builders.keys():
-			cache.cleanup_builder(pid)
-		
-		# Clear all caches
-		with cache.lock:
-			cache.trees.clear()
-			cache.elements_flat.clear()
-			cache.search_cache.clear()
-			cache.last_updated.clear()
-			cache.partial_trees.clear()
-			cache.element_checksums.clear()
-		
-		# Clear LRU cache
-		_get_cached_search_key.cache_clear()
-		
+		tree_manager.clear_all_caches()
 		return {"status": "success", "message": "All caches cleared"}
 		
 	except Exception as e:
@@ -1917,9 +1450,8 @@ async def clear_caches():
 @app.on_event("shutdown")
 async def shutdown_event():
 	"""Enhanced cleanup on server shutdown"""
-	global cache
-	for pid in cache.builders.keys():
-		cache.cleanup_builder(pid)
+	# Cleanup will be handled by the tree_manager
+	pass
 
 if __name__ == "__main__":
 	import uvicorn

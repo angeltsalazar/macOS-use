@@ -1,18 +1,54 @@
 # --- START OF FILE examples/basic_agent.py ---
+import argparse
+import datetime
+import logging
+import os
+
+# Parse command line arguments FIRST
+parser = argparse.ArgumentParser(description='Basic agent for macOS Notes app')
+parser.add_argument('--console-log-level', default='NONE', 
+                    choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL', 'NONE'],
+                    help='Log level for console output (default: NONE)')
+args = parser.parse_args()
+
+# Configure logging BEFORE importing other modules
+os.makedirs('/tmp/macos-use-log', exist_ok=True)
+log_file = f'/tmp/macos-use-log/agent_{datetime.datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+
+# Create file handler for ALL messages (DEBUG and above)
+file_handler = logging.FileHandler(log_file)
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+
+# Configure root logger FIRST, before any other imports
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.DEBUG)
+root_logger.addHandler(file_handler)
+
+# Create console handler only if requested
+if args.console_log_level != 'NONE':
+    console_handler = logging.StreamHandler()
+    console_level = getattr(logging, args.console_log_level)
+    console_handler.setLevel(console_level)
+    console_handler.setFormatter(logging.Formatter('%(levelname)s     [%(name)s] %(message)s'))
+    root_logger.addHandler(console_handler)
+
+print(f"📄 All logs will be written to: {log_file}")
+if args.console_log_level != 'NONE':
+    print(f"📺 Console log level: {args.console_log_level}")
+else:
+    print("📺 Console logging disabled")
+
+# NOW import other modules (they will use our configured logging)
 import asyncio
 import json
 import time
-import logging
-import os
-import datetime
+
 import Cocoa
-from langchain_anthropic import ChatAnthropic
-from langchain_openai import ChatOpenAI
-from langchain_google_genai import ChatGoogleGenerativeAI
-from pydantic import SecretStr
 
 from mlx_use.mac.actions import click, type_into
-from mlx_use.mac.tree import MacUITreeBuilder
+from mlx_use.mac.llm_utils import set_llm
+from mlx_use.mac.optimized_tree import OptimizedTreeManager
 
 NOTES_BUNDLE_ID = 'com.apple.Notes'
 NOTES_APP_NAME = 'Notes'
@@ -21,44 +57,6 @@ NOTES_APP_NAME = 'Notes'
 FOLDER_NAME = 'Ofir folder'
 HIGHLIGHT_PREFIX = 'highlight:'
 
-
-def set_llm(llm_provider:str = None):
-	if not llm_provider:
-		raise ValueError("No llm provider was set")
-	
-	if llm_provider == "OAI":
-		api_key = os.getenv('OPENAI_API_KEY')
-		return ChatOpenAI(model='gpt-4o', api_key=SecretStr(api_key))
-
-	if llm_provider == "github":
-		api_key = os.getenv('GITHUB_TOKEN')
-		return ChatOpenAI(model='gpt-4o', base_url="https://models.inference.ai.azure.com", api_key=SecretStr(api_key))
-
-	if llm_provider == "grok":
-		api_key = os.getenv('XAI_API_KEY')
-		return ChatOpenAI(model='grok-2', base_url="https://api.x.ai/v1", api_key=SecretStr(api_key))
-
-	if llm_provider == "google":
-		api_key = os.getenv('GEMINI_API_KEY')
-		return ChatGoogleGenerativeAI(
-			model='gemini-2.5-pro',  # Use Flash model for more reliability
-			api_key=SecretStr(api_key),
-			temperature=0.1,  # Lower temperature for more consistent responses
-			max_tokens=200000,   # Increased for better reasoning
-		)
-	
-	if llm_provider == "google-pro":
-		api_key = os.getenv('GEMINI_API_KEY')
-		return ChatGoogleGenerativeAI(
-			model='gemini-2.5-pro',  # Newer, more powerful model
-			api_key=SecretStr(api_key),
-			temperature=0.1,  # Lower temperature for more consistent responses
-			max_tokens=300,   # Increased for better reasoning
-		)
-
-	if llm_provider == "anthropic":
-		api_key = os.getenv('ANTHROPIC_API_KEY')
-		return ChatAnthropic(model='claude-3-5-sonnet-20241022', api_key=SecretStr(api_key))
 
 # global object for LLM	
 llm = set_llm('google') 
@@ -103,7 +101,7 @@ class FolderCreationState:
 		elif not self.folder_name_entered:
 			context = "The 'New Folder' button has been clicked. Look for the newly appeared text field to type the folder name."
 		elif not self.ok_clicked:
-			context = 'Folder name has been entered. Now find and click the "OK" button to confirm folder creation.'
+			context = f'Folder name "{FOLDER_NAME}" has been entered in the text field. Now find and click the "OK" button to confirm and create the folder. IMPORTANT: Look for buttons with "OK", "Crear", "Aceptar", or similar confirmation text.'
 		else:
 			context = 'Folder creation process completed.'
 		
@@ -145,7 +143,7 @@ class FolderCreationState:
 			self.last_action = 'clicked_ok'
 
 
-def process_action(action_json, builder, state):
+def process_action(action_json, tree_manager, pid, state):
 	"""Process a single action from the LLM response"""
 	action_name = action_json.get('action')
 	parameters = action_json.get('parameters', {})
@@ -154,26 +152,58 @@ def process_action(action_json, builder, state):
 	if action_name == 'click':
 		index_to_click = parameters.get('index')
 		print(f'🔍 Attempting to click index: {index_to_click}')
-		if isinstance(index_to_click, int) and index_to_click in builder._element_cache:
-			element_to_click = builder._element_cache[index_to_click]
+		
+		# Find element by highlight index
+		elements = tree_manager.get_flattened_elements(pid)
+		element_to_click = None
+		for element_dict in elements:
+			if element_dict.get('highlight_index') == index_to_click:
+				# Need to find the actual MacElementNode from the tree
+				element_to_click = tree_manager.find_element_by_path(pid, element_dict['path'])
+				break
+				
+		if element_to_click:
 			print(f'🎯 Clicking element: {element_to_click}')
 			success = click(element_to_click, 'AXPress')
 			print(f'✅ Click successful: {success}')
 			state.update(action_name, success, str(element_to_click), index_to_click)
+			
+			# Check if this was an OK button confirming folder creation
+			if success and 'ok' in str(element_to_click).lower():
+				print("🎯 Clicked OK button - marking folder creation as completed")
+				state.ok_clicked = True
+			
+			# Invalidate cache after click to see UI changes
+			if success:
+				tree_manager.invalidate_cache(pid)
 		else:
-			print(f'❌ Invalid index {index_to_click} for click action. Available indices: {list(builder._element_cache.keys())[:10]}...')
+			available_indices = [el.get('highlight_index') for el in elements if el.get('highlight_index') is not None]
+			print(f'❌ Invalid index {index_to_click} for click action. Available indices: {available_indices[:10]}...')
 	elif action_name == 'type':
 		index_to_type = parameters.get('index')
 		text_to_type = parameters.get('text')
 		print(f'🔍 Attempting to type "{text_to_type}" into index: {index_to_type}')
-		if isinstance(index_to_type, int) and text_to_type is not None and index_to_type in builder._element_cache:
-			element_to_type_into = builder._element_cache[index_to_type]
+		
+		# Find element by highlight index
+		elements = tree_manager.get_flattened_elements(pid)
+		element_to_type_into = None
+		for element_dict in elements:
+			if element_dict.get('highlight_index') == index_to_type:
+				element_to_type_into = tree_manager.find_element_by_path(pid, element_dict['path'])
+				break
+				
+		if element_to_type_into and text_to_type is not None:
 			print(f'🎯 Typing into element: {element_to_type_into}')
 			success = type_into(element_to_type_into, text_to_type)
 			print(f'✅ Typing successful: {success}')
-			state.update(action_name, success)
+			state.update(action_name, success, f'typed "{text_to_type}" into {element_to_type_into.role}')
+			
+			# Invalidate cache after typing to see UI changes
+			if success:
+				tree_manager.invalidate_cache(pid)
 		else:
-			print(f'❌ Invalid index {index_to_type} or text for type action. Available indices: {list(builder._element_cache.keys())[:10]}...')
+			available_indices = [el.get('highlight_index') for el in elements if el.get('highlight_index') is not None]
+			print(f'❌ Invalid index {index_to_type} or text for type action. Available indices: {available_indices[:10]}...')
 	else:
 		print(f'❌ Unknown action: {action_name}')
 	
@@ -276,7 +306,7 @@ After each action, you will receive feedback on whether the action was successfu
 Remember your goal: "Create a new folder in the notes app called '{FOLDER_NAME}'". Analyze the current UI and available actions carefully to determine the most effective next step."""
 
 
-def process_llm_response(llm_response, builder, state):
+def process_llm_response(llm_response, tree_manager, pid, state):
 	"""Process the LLM response and execute the action"""
 	try:
 		response_content = llm_response.content.strip()
@@ -286,37 +316,54 @@ def process_llm_response(llm_response, builder, state):
 			print('❌ Empty response from LLM - may be due to safety filtering')
 			print('💡 Trying fallback action...')
 			# Fallback: click the first available element
-			if builder._element_cache:
-				# Convert keys to list and get first element
-				available_indices = list(builder._element_cache.keys())
-				if available_indices:
-					first_index = available_indices[0]
-					fallback_action = {"action": "click", "parameters": {"index": first_index}}
-					process_action(fallback_action, builder, state)
+			elements = tree_manager.get_flattened_elements(pid)
+			interactive_elements = [el for el in elements if el.get('is_interactive') and el.get('highlight_index') is not None]
+			if interactive_elements:
+				first_index = interactive_elements[0]['highlight_index']
+				fallback_action = {"action": "click", "parameters": {"index": first_index}}
+				process_action(fallback_action, tree_manager, pid, state)
 			return
 		
-		# Clean up the response by removing markdown code blocks
-		if response_content.startswith('```') and response_content.endswith('```'):
-			lines = response_content.split('\n')
-			response_content = '\n'.join(lines[1:-1])  # Remove first and last lines
-
-		# Additional cleaning for common issues
-		response_content = response_content.strip()
+		# Extract JSON from response that may have text before/after
+		json_content = None
 		
-		if not response_content:
-			print('❌ Empty response after cleaning')
+		# Look for JSON code blocks first
+		if '```json' in response_content:
+			start = response_content.find('```json') + 7
+			end = response_content.find('```', start)
+			if end > start:
+				json_content = response_content[start:end].strip()
+		elif '```' in response_content:
+			# Generic code block
+			start = response_content.find('```') + 3
+			end = response_content.find('```', start)
+			if end > start:
+				json_content = response_content[start:end].strip()
+		else:
+			# Look for JSON object in the text
+			start = response_content.find('{')
+			end = response_content.rfind('}')
+			if start >= 0 and end > start:
+				json_content = response_content[start:end+1]
+		
+		if not json_content:
+			json_content = response_content
+		
+		if not json_content.strip():
+			print('❌ Empty JSON content after extraction')
 			return
 			
-		action_json = json.loads(response_content)
+		action_json = json.loads(json_content)
 		
 		# Handle case where LLM returns an array instead of object
 		if isinstance(action_json, list) and len(action_json) > 0:
 			action_json = action_json[0]  # Take the first element
 		
-		process_action(action_json, builder, state)
+		process_action(action_json, tree_manager, pid, state)
 
 	except json.JSONDecodeError as e:
 		print(f'❌ Could not decode LLM response as JSON: {e}')
+		print(f'Extracted JSON: "{json_content if "json_content" in locals() else "N/A"}"')
 		print(f'Raw response: "{llm_response.content}"')
 	except Exception as e:
 		print(f'❌ An error occurred: {e}')
@@ -391,12 +438,9 @@ def optimize_ui_tree_string(ui_tree_string):
 	return '\n'.join(optimized_lines)
 
 
-def _setup_ui_builder():
-	"""Setup and configure the UI tree builder"""
-	builder = MacUITreeBuilder()
-	builder.max_children = 50   # Reduced drastically for performance
-	builder.max_depth = 10      # Reduced for performance
-	return builder
+def _setup_tree_manager():
+	"""Setup and configure the optimized tree manager"""
+	return OptimizedTreeManager()
 
 
 def _print_step_info(step, max_steps, step_start_time, last_step_time):
@@ -406,10 +450,11 @@ def _print_step_info(step, max_steps, step_start_time, last_step_time):
 	print(f'\n--- Step {step + 1}/{max_steps} [{timestamp}] (Time since last: {time_since_last:.2f}s) ---')
 
 
-async def _build_and_optimize_ui_tree(builder, notes_app):
+async def _build_and_optimize_ui_tree(tree_manager, notes_app):
 	"""Build and optimize the UI tree"""
 	tree_build_start = time.time()
-	root = await builder.build_tree(notes_app.processIdentifier())
+	pid = notes_app.processIdentifier()
+	root = await tree_manager.build_tree(pid)
 	tree_build_time = time.time() - tree_build_start
 	print(f'UI tree build time: {tree_build_time:.2f}s')
 
@@ -427,22 +472,27 @@ async def _build_and_optimize_ui_tree(builder, notes_app):
 	return ui_tree_string, optimized_ui_tree
 
 
-def _try_axconfirm_on_text_field(builder, state):
+def _try_axconfirm_on_text_field(tree_manager, pid, state):
 	"""Try AXConfirm action on text field"""
+	elements = tree_manager.get_flattened_elements(pid)
 	text_field_index = 132  # The text field index from the logs
-	if text_field_index not in builder._element_cache:
+	
+	# Find text field by highlight index
+	text_field_element = None
+	for element_dict in elements:
+		if element_dict.get('highlight_index') == text_field_index:
+			text_field_element = tree_manager.find_element_by_path(pid, element_dict['path'])
+			break
+	
+	if not text_field_element or 'AXConfirm' not in text_field_element.actions:
 		return False
 	
-	text_field = builder._element_cache[text_field_index]
-	if 'AXConfirm' not in text_field.actions:
-		return False
-	
-	print(f"🎯 Using AXConfirm on text field: {text_field}")
+	print(f"🎯 Using AXConfirm on text field: {text_field_element}")
 	try:
 		from mlx_use.mac.actions import perform_action
-		success = perform_action(text_field, 'AXConfirm')
+		success = perform_action(text_field_element, 'AXConfirm')
 		if success:
-			state.update('click', True, str(text_field), text_field_index)
+			state.update('click', True, str(text_field_element), text_field_index)
 			state.ok_clicked = True
 			print("✅ Successfully used AXConfirm on text field")
 			return True
@@ -454,65 +504,156 @@ def _try_axconfirm_on_text_field(builder, state):
 		return False
 
 
-def _try_click_ok_buttons(builder, state):
+def _try_click_ok_buttons(tree_manager, pid, state):
 	"""Try to find and click OK buttons"""
-	for index, element in builder._element_cache.items():
-		element_str = str(element).lower()
-		if 'button' in element_str and ('ok' in element_str or 'accept' in element_str or 'confirm' in element_str):
-			print(f"🎯 Found potential OK button: {element}")
-			try:
-				success = click(element, 'AXPress')
-				if success:
-					state.update('click', True, str(element), index)
-					state.ok_clicked = True
-					print("✅ Successfully clicked OK button")
-					return True
-			except Exception as e:
-				print(f"❌ Error with button {index}: {e}")
-				continue
+	# Force a fresh tree build to see new elements
+	tree_manager.invalidate_cache(pid)
+	elements = tree_manager.get_flattened_elements(pid)
+	
+	print(f"🔍 Searching for OK buttons among {len(elements)} elements...")
+	
+	# Look for buttons with OK-related keywords
+	ok_keywords = ['ok', 'aceptar', 'accept', 'confirm', 'crear', 'create', 'done', 'apply', 'save', 'guardar']
+	
+	for element_dict in elements:
+		if not element_dict.get('is_interactive'):
+			continue
+			
+		# Check role
+		role = element_dict.get('role', '').lower()
+		if 'button' not in role:
+			continue
+			
+		# Check attributes for OK-related text
+		attributes = element_dict.get('attributes', {})
+		title = str(attributes.get('title', '')).lower()
+		description = str(attributes.get('description', '')).lower()
+		
+		# Check if any OK keyword is found
+		if any(keyword in title or keyword in description for keyword in ok_keywords):
+			element = tree_manager.find_element_by_path(pid, element_dict['path'])
+			if element:
+				print(f"🎯 Found potential OK button: {element} (title: '{title}', desc: '{description}')")
+				try:
+					success = click(element, 'AXPress')
+					if success:
+						state.update('click', True, str(element), element_dict.get('highlight_index'))
+						state.ok_clicked = True
+						print("✅ Successfully clicked OK button")
+						tree_manager.invalidate_cache(pid)  # Refresh after successful click
+						return True
+				except Exception as e:
+					print(f"❌ Error with button {element_dict.get('highlight_index')}: {e}")
+					continue
+	
+	print("❌ No OK buttons found")
 	return False
 
 
-def _handle_typing_loop(state, builder):
+def _handle_typing_loop(state, tree_manager, pid):
 	"""Handle typing loop detection and recovery"""
 	print(f"🔄 TYPING LOOP DETECTED! Typing '{FOLDER_NAME}' repeatedly.")
 	print("💡 Text already entered, looking for OK button...")
 	state.folder_name_entered = True
 	
+	# Force fresh tree rebuild to see new dialog elements
+	tree_manager.invalidate_cache(pid)
+	
 	# First try AXConfirm on the text field itself
-	if _try_axconfirm_on_text_field(builder, state):
+	if _try_axconfirm_on_text_field(tree_manager, pid, state):
 		return
 	
 	# If that fails, look for buttons that might confirm the action
-	_try_click_ok_buttons(builder, state)
+	_try_click_ok_buttons(tree_manager, pid, state)
 
 
-def _handle_click_loop(state, builder):
+def _handle_click_loop(state, tree_manager, pid):
 	"""Handle click loop detection and recovery"""
 	recent_clicks = state.last_clicked_indices[-3:]
 	if len(set(recent_clicks)) == 1:  # All same index
 		print(f"🔄 LOOP DETECTED! Clicking same element {recent_clicks[0]} repeatedly.")
 		print("💡 Forcing different action to break loop...")
 		# Force a different action - look for text fields or other buttons
-		available_indices = list(builder._element_cache.keys())
+		elements = tree_manager.get_flattened_elements(pid)
+		available_indices = [el.get('highlight_index') for el in elements if el.get('highlight_index') is not None]
 		different_indices = [i for i in available_indices if i not in recent_clicks]
 		if different_indices:
 			print(f"🎯 Trying alternative element: {different_indices[0]}")
 			# Try to click a different element
 			try:
-				alt_element = builder._element_cache[different_indices[0]]
-				click(alt_element, 'AXPress')
-				state.update('click', True, str(alt_element), different_indices[0])
+				for element_dict in elements:
+					if element_dict.get('highlight_index') == different_indices[0]:
+						alt_element = tree_manager.find_element_by_path(pid, element_dict['path'])
+						if alt_element:
+							click(alt_element, 'AXPress')
+							state.update('click', True, str(alt_element), different_indices[0])
+						break
 			except Exception:
 				pass
 
 
 def _check_goal_achieved(state, ui_tree_string):
 	"""Check if the goal has been achieved"""
+	# Check if folder was successfully created by looking for the folder name 
+	# in the folders list (not in text content or input fields)
+	if FOLDER_NAME in ui_tree_string:
+		context = _extract_context_around_folder_name(ui_tree_string)
+		
+		# EXCLUDE text fields and input dialogs - these are not real folders
+		if any(exclude_keyword in context.lower() for exclude_keyword in ['axtextfield', 'value="nueva carpeta"', 'nombre:', 'checkbox']):
+			print(f"🔍 Found '{FOLDER_NAME}' in input field/dialog - NOT a real folder, continuing...")
+			print(f"🔍 Context: {context}")
+			return False
+		
+		# INCLUDE only real folder locations (in outline/list views)
+		if any(keyword in context.lower() for keyword in ['outline', 'axstatictext']):
+			# Additional check: make sure it's not in a dialog context
+			if 'checkbox' not in context.lower() and 'nombre:' not in context.lower():
+				print(f"✅ Found '{FOLDER_NAME}' in UI tree - folder exists!")
+				print(f"🔍 UI tree excerpt containing folder name: {context}")
+				return True
+		
+		print(f"🔍 Found '{FOLDER_NAME}' but not in real folder context - continuing...")
+		print(f"🔍 Context: {context}")
+		return False
+	
+	# Check if we get a very specific "name already in use" error dialog
+	# Look for the exact Spanish text that appears in folder creation errors
+	if ("nombre ya en uso" in ui_tree_string.lower() or "name already in use" in ui_tree_string.lower()):
+		# Verify this is actually an error dialog by checking for dialog-specific elements
+		if any(keyword in ui_tree_string.lower() for keyword in ['axbutton', 'ok', 'aceptar', 'dialog']):
+			print(f"✅ Got 'name already in use' error dialog - '{FOLDER_NAME}' was already created successfully!")
+			print(f"🔍 Error context: {_extract_error_context(ui_tree_string)}")
+			return True
+		else:
+			print("🔍 Found 'name already in use' text but no dialog context - continuing...")
+			return False
+	
+	# Original check
 	return state.ok_clicked and FOLDER_NAME in ui_tree_string
 
+def _extract_context_around_folder_name(ui_tree_string):
+	"""Extract context around the folder name for debugging"""
+	lines = ui_tree_string.split('\n')
+	for i, line in enumerate(lines):
+		if FOLDER_NAME in line:
+			start = max(0, i-2)
+			end = min(len(lines), i+3)
+			return '\n'.join(lines[start:end])
+	return "Context not found"
 
-async def _execute_automation_step(step, max_steps, state, builder, notes_app, last_step_time):
+def _extract_error_context(ui_tree_string):
+	"""Extract context around error messages for debugging"""
+	lines = ui_tree_string.split('\n')
+	for i, line in enumerate(lines):
+		if "nombre ya en uso" in line.lower() or "name already in use" in line.lower():
+			start = max(0, i-3)
+			end = min(len(lines), i+4)
+			return '\n'.join(lines[start:end])
+	return "Error context not found"
+
+
+async def _execute_automation_step(step, max_steps, state, tree_manager, notes_app, last_step_time):
 	"""Execute a single automation step"""
 	global llm
 	if state.ok_clicked:
@@ -522,9 +663,32 @@ async def _execute_automation_step(step, max_steps, state, builder, notes_app, l
 	step_start_time = time.time()
 	_print_step_info(step, max_steps, step_start_time, last_step_time)
 	
-	ui_tree_string, optimized_ui_tree = await _build_and_optimize_ui_tree(builder, notes_app)
+	pid = notes_app.processIdentifier()
+	
+	# If we've already typed the folder name, force tree refresh to see dialog
+	if state.folder_name_entered:
+		print("💡 Folder name already entered, forcing tree refresh to find OK button...")
+		tree_manager.invalidate_cache(pid)
+	
+	ui_tree_string, optimized_ui_tree = await _build_and_optimize_ui_tree(tree_manager, notes_app)
 	if not ui_tree_string:
 		return False, last_step_time
+
+	# Check if goal is already achieved BEFORE doing anything else
+	if _check_goal_achieved(state, ui_tree_string):
+		print(f"✅ Goal already achieved! '{FOLDER_NAME}' folder creation completed.")
+		return True, last_step_time
+
+	# Check for typing loops BEFORE processing LLM response
+	if len(state.action_history) >= 3:
+		recent_actions = state.action_history[-3:]
+		if all('type:' in action and FOLDER_NAME in action for action in recent_actions):
+			print("🔄 TYPING LOOP DETECTED BEFORE LLM! Handling immediately...")
+			_handle_typing_loop(state, tree_manager, pid)
+			# If we handled the loop successfully, check goal and return
+			if state.ok_clicked:
+				print(f"✅ Goal achieved via loop handling! '{FOLDER_NAME}' created and confirmed.")
+				return True, last_step_time
 
 	# Generate and process LLM response
 	state_context = state.get_context()
@@ -536,17 +700,11 @@ async def _execute_automation_step(step, max_steps, state, builder, notes_app, l
 	print(f'LLM response time: {llm_time:.2f}s')
 	print(f'LLM Response.content is: {llm_response.content}\n\n')
 
-	process_llm_response(llm_response, builder, state)
-
-	# Check for typing loops
-	if len(state.action_history) >= 3:
-		recent_actions = state.action_history[-3:]
-		if all('type:' in action and FOLDER_NAME in action for action in recent_actions):
-			_handle_typing_loop(state, builder)
+	process_llm_response(llm_response, tree_manager, pid, state)
 
 	# Check for click loops
 	if len(state.last_clicked_indices) >= 3:
-		_handle_click_loop(state, builder)
+		_handle_click_loop(state, tree_manager, pid)
 
 	# Check if goal achieved
 	if _check_goal_achieved(state, ui_tree_string):
@@ -558,7 +716,7 @@ async def _execute_automation_step(step, max_steps, state, builder, notes_app, l
 	step_total_time = last_step_time - step_start_time
 	print(f'Step {step + 1} total time: {step_total_time:.2f}s')
 
-	await asyncio.sleep(0.5)  # Give time for the UI to update
+	await asyncio.sleep(1.0)  # Give more time for the UI to update
 	return False, last_step_time
 
 
@@ -570,13 +728,13 @@ async def main():
 		if not notes_app:
 			return
 
-		builder = _setup_ui_builder()
+		tree_manager = _setup_tree_manager()
 		max_steps = 10
 		last_step_time = time.time()
 		
 		for step in range(max_steps):
 			goal_achieved, last_step_time = await _execute_automation_step(
-				step, max_steps, state, builder, notes_app, last_step_time
+				step, max_steps, state, tree_manager, notes_app, last_step_time
 			)
 			if goal_achieved:
 				break
@@ -586,8 +744,8 @@ async def main():
 		import traceback
 		traceback.print_exc()
 	finally:
-		if 'builder' in locals():
-			builder.cleanup()
+		if 'tree_manager' in locals() and 'notes_app' in locals():
+			tree_manager.cleanup(notes_app.processIdentifier())
 
 
 if __name__ == '__main__':

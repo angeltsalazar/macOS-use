@@ -3,8 +3,9 @@
 Test that Nueva carpeta button appears in interactive-only mode
 """
 
+
 import requests
-import json
+
 
 def test_nueva_carpeta_visibility():
 	"""Test that Nueva carpeta button is visible in interactive mode"""
@@ -60,7 +61,7 @@ def test_nueva_carpeta_visibility():
 	
 	if response.status_code == 200:
 		interactive_tree = response.json()
-		print(f"✅ Interactive tree loaded successfully")
+		print("✅ Interactive tree loaded successfully")
 		
 		if find_nueva_carpeta_in_tree(interactive_tree):
 			print("🎉 Nueva carpeta button FOUND in interactive mode!")
@@ -90,7 +91,7 @@ def test_nueva_carpeta_visibility():
 	
 	if response.status_code == 200:
 		all_tree = response.json()
-		print(f"✅ All elements tree loaded successfully")
+		print("✅ All elements tree loaded successfully")
 		
 		if find_nueva_carpeta_in_tree(all_tree):
 			print("✅ Nueva carpeta button also found in all elements mode")
@@ -117,7 +118,7 @@ def test_nueva_carpeta_visibility():
 	else:
 		print(f"❌ Search failed: {response.status_code}")
 
-	print(f"\n📊 Summary:")
+	print("\n📊 Summary:")
 	print("✅ Nueva carpeta button should now appear in interactive-only mode")
 	print("✅ Max depth increased from 3 to 5 for interactive mode")
 	print("✅ Improved filtering logic for better container detection")

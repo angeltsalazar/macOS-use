@@ -3,8 +3,10 @@
 Test performance optimizations
 """
 
-import requests
 import time
+
+import requests
+
 
 def test_performance_optimizations():
 	"""Test the performance improvements"""
@@ -55,7 +57,7 @@ def test_performance_optimizations():
 		improvement = ((initial_time - cached_time) / initial_time) * 100
 		print(f"🚀 Speed improvement: {improvement:.1f}%")
 	else:
-		print(f"❌ Cached load failed")
+		print("❌ Cached load failed")
 	
 	# Test 3: Quick refresh mode
 	print("\n3️⃣ Testing quick refresh mode...")
@@ -68,7 +70,7 @@ def test_performance_optimizations():
 		improvement = ((initial_time - quick_time) / initial_time) * 100
 		print(f"🚀 Speed improvement: {improvement:.1f}%")
 	else:
-		print(f"❌ Quick refresh failed")
+		print("❌ Quick refresh failed")
 	
 	# Test 4: Search performance
 	print("\n4️⃣ Testing search performance...")
@@ -95,7 +97,7 @@ def test_performance_optimizations():
 		interactive = response.json()
 		print(f"✅ Interactive elements: {interactive_time:.3f}s ({len(interactive)} elements)")
 	else:
-		print(f"❌ Interactive elements failed")
+		print("❌ Interactive elements failed")
 	
 	# Test 6: Multiple searches (cache test)
 	print("\n6️⃣ Testing search caching...")
@@ -118,20 +120,20 @@ def test_performance_optimizations():
 			improvement = ((first_search - cached_search) / first_search) * 100
 			print(f"   🚀 Cache improvement: {improvement:.1f}%")
 	
-	print(f"\n📊 Performance Summary:")
+	print("\n📊 Performance Summary:")
 	print(f"✅ Tree caching: {improvement:.1f}% faster")
-	print(f"✅ Quick refresh: Available for recent updates")
-	print(f"✅ Search caching: Enabled")
-	print(f"✅ Interactive filter: Fast element access")
+	print("✅ Quick refresh: Available for recent updates")
+	print("✅ Search caching: Enabled")
+	print("✅ Interactive filter: Fast element access")
 	
-	print(f"\n🎯 UI Optimizations Available:")
+	print("\n🎯 UI Optimizations Available:")
 	print("✅ Collapsible apps panel")
 	print("✅ Selected app info bar")
 	print("✅ Smart refresh (avoids unnecessary updates)")
 	print("✅ Quick mode for recent changes")
 	print("✅ Auto-collapse after app selection")
 	
-	print(f"\n🌐 Try the optimized interface at http://localhost:8000")
+	print("\n🌐 Try the optimized interface at http://localhost:8000")
 	print("   - Apps panel collapses automatically after selection")
 	print("   - Smart Refresh button prevents unnecessary updates")
 	print("   - Selected app info shows current focus")

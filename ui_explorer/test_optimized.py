@@ -3,9 +3,10 @@
 Test the optimized server with Notes app
 """
 
-import requests
 import time
-import json
+
+import requests
+
 
 def test_optimized_server():
 	"""Test the optimized server functionality"""
@@ -45,12 +46,12 @@ def test_optimized_server():
 			response = requests.get(f"http://localhost:8000/api/apps/{notes_pid}/tree", timeout=60)
 			if response.status_code == 200:
 				tree_data = response.json()
-				print(f"✅ Tree loaded successfully")
+				print("✅ Tree loaded successfully")
 				print(f"    Root: {tree_data['element']['role']}")
 				print(f"    Children: {len(tree_data['children'])}")
 				
 				# Test search for "Nueva Carpeta"
-				print(f"🔍 Testing search for 'Nueva Carpeta'...")
+				print("🔍 Testing search for 'Nueva Carpeta'...")
 				response = requests.get(f"http://localhost:8000/api/apps/{notes_pid}/search?q=Nueva%20Carpeta", timeout=30)
 				if response.status_code == 200:
 					results = response.json()
@@ -64,7 +65,7 @@ def test_optimized_server():
 					print(f"❌ Search failed: {response.status_code} - {response.text}")
 					
 				# Test query builder
-				print(f"🎯 Testing query by title...")
+				print("🎯 Testing query by title...")
 				query_data = {
 					"query_type": "title",
 					"query_value": "Nueva carpeta",
@@ -85,7 +86,7 @@ def test_optimized_server():
 					print(f"❌ Query failed: {response.status_code}")
 					
 				# Test interactive elements
-				print(f"⚡ Testing interactive elements...")
+				print("⚡ Testing interactive elements...")
 				response = requests.get(f"http://localhost:8000/api/apps/{notes_pid}/interactive", timeout=30)
 				if response.status_code == 200:
 					interactive = response.json()

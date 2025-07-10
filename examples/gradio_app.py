@@ -1,9 +1,10 @@
 import asyncio
+
 import gradio as gr
+from langchain_openai import ChatOpenAI
 
 from mlx_use import Agent
 from mlx_use.controller.service import Controller
-from langchain_openai import ChatOpenAI
 
 # As an example, we are instantiating a ChatOpenAI language model.
 # Ensure you have your OpenAI API key set as an environment variable, or pass it here.

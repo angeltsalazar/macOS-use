@@ -4,7 +4,6 @@ import logging
 from datetime import datetime
 from typing import List, Optional, Type
 
-from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
 	AIMessage,
@@ -17,7 +16,6 @@ from langchain_openai import ChatOpenAI
 from mlx_use.agent.message_manager.views import MessageHistory, MessageMetadata
 from mlx_use.agent.prompts import AgentMessagePrompt, SystemPrompt
 from mlx_use.agent.views import ActionResult, AgentOutput, AgentStepInfo
-from mlx_use.mac.element import MacElementNode
 
 logger = logging.getLogger(__name__)
 

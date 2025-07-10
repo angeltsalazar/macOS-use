@@ -1,7 +1,10 @@
 from datetime import datetime
 from typing import List, Optional
+
 from langchain_core.messages import HumanMessage, SystemMessage
+
 from mlx_use.agent.views import ActionResult, AgentStepInfo
+
 
 class SystemPrompt:
     def __init__(self, action_description: str, current_date: datetime, max_actions_per_step: int = 10):

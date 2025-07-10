@@ -1,14 +1,10 @@
 # --- START OF FILE mac_use/mac/actions.py ---
 import logging
 
-import Cocoa
 from ApplicationServices import (
-	AXUIElementPerformAction, 
-	AXUIElementSetAttributeValue, 
-	kAXPressAction, 
-	kAXValueAttribute, 
-	kAXConfirmAction,
-	AXUIElementCopyActionNames
+	AXUIElementPerformAction,
+	AXUIElementSetAttributeValue,
+	kAXValueAttribute,
 )
 from Foundation import NSString
 

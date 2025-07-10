@@ -3,9 +3,10 @@
 Test interactive-only filtering to demonstrate performance improvements
 """
 
-import requests
 import time
-import json
+
+import requests
+
 
 def test_interactive_filter():
 	"""Compare interactive-only vs all elements performance"""
@@ -70,13 +71,13 @@ def test_interactive_filter():
 	time_improvement = ((all_elements_time - interactive_time) / all_elements_time) * 100 if all_elements_time > 0 else 0
 	elements_reduction = ((all_count - interactive_count) / all_count) * 100 if all_count > 0 else 0
 	
-	print(f"\n📈 Performance Comparison:")
+	print("\n📈 Performance Comparison:")
 	print(f"⚡ Time improvement: {time_improvement:.1f}% faster")
 	print(f"🔽 Elements reduced: {elements_reduction:.1f}% fewer")
 	print(f"📋 Filtered out: {all_count - interactive_count} non-interactive elements")
 	
 	# Test 3: Interactive elements API
-	print(f"\n⚡ Testing Interactive Elements API...")
+	print("\n⚡ Testing Interactive Elements API...")
 	start_time = time.time()
 	response = requests.get(f"http://localhost:8000/api/apps/{notes_pid}/interactive")
 	api_time = time.time() - start_time
@@ -92,23 +93,23 @@ def test_interactive_filter():
 			role = element['role']
 			element_types[role] = element_types.get(role, 0) + 1
 		
-		print(f"📊 Element types found:")
+		print("📊 Element types found:")
 		for role, count in sorted(element_types.items()):
 			print(f"   {role}: {count}")
 	
-	print(f"\n🎉 Results Summary:")
+	print("\n🎉 Results Summary:")
 	print(f"✅ Interactive-only filter: {interactive_count} elements in {interactive_time:.2f}s")
 	print(f"⚠️ All elements: {all_count} elements in {all_elements_time:.2f}s")
 	print(f"🚀 Performance gain: {time_improvement:.1f}% faster with {elements_reduction:.1f}% fewer elements")
 	
-	print(f"\n💡 Benefits of Interactive-Only Mode:")
+	print("\n💡 Benefits of Interactive-Only Mode:")
 	print("✅ Faster loading (less data to process)")
 	print("✅ Fewer serialization errors (problematic elements filtered out)")
 	print("✅ Focus on actionable elements (buttons, fields, etc.)")
 	print("✅ Better user experience (relevant elements only)")
 	print("✅ Reduced memory usage")
 	
-	print(f"\n🌐 Web Interface Updates:")
+	print("\n🌐 Web Interface Updates:")
 	print("✅ Interactive Only button (green) - default mode")
 	print("✅ All Elements button (yellow) - show everything")
 	print("✅ Active button highlighting")

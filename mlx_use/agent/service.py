@@ -1,15 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-import base64
-import io
 import json
 import logging
 import os
-import platform
-import textwrap
 import uuid
-from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
 
@@ -17,15 +12,13 @@ from dotenv import load_dotenv
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
 	BaseMessage,
-	SystemMessage,
 )
 from lmnr import observe
 from openai import RateLimitError
-from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel, ValidationError
 
 from mlx_use.agent.message_manager.service import MessageManager
-from mlx_use.agent.prompts import AgentMessagePrompt, SystemPrompt
+from mlx_use.agent.prompts import SystemPrompt
 from mlx_use.agent.views import (
 	ActionResult,
 	AgentError,
@@ -36,7 +29,7 @@ from mlx_use.agent.views import (
 )
 from mlx_use.controller.registry.views import ActionModel
 from mlx_use.controller.service import Controller
-from mlx_use.mac.tree import MacUITreeBuilder
+from mlx_use.mac.optimized_tree import OptimizedTreeManager
 from mlx_use.telemetry.service import ProductTelemetry
 from mlx_use.telemetry.views import (
 	AgentEndTelemetryEvent,
@@ -98,7 +91,7 @@ class Agent:
 		self.max_error_length = max_error_length
 		self.generate_gif = generate_gif
 
-		self.mac_tree_builder = MacUITreeBuilder()
+		self.mac_tree_builder = OptimizedTreeManager()
 		# Controller setup
 		self.controller = controller
 		self.max_actions_per_step = max_actions_per_step
@@ -174,11 +167,18 @@ class Agent:
 			if self.chat_model_library == 'ChatGoogleGenerativeAI':
 				return None
 			elif self.chat_model_library == 'ChatOpenAI':
-				return 'function_calling'
+				# Check if this is LM Studio by looking at the base_url
+				if hasattr(self.llm, 'openai_api_base') and 'localhost' in str(self.llm.openai_api_base):
+					return None  # LM Studio doesn't support function_calling
+				elif hasattr(self.llm, 'base_url') and 'localhost' in str(self.llm.base_url):
+					return None  # LM Studio doesn't support function_calling
+				else:
+					return 'function_calling'
 			elif self.chat_model_library == 'AzureChatOpenAI':
 				return 'function_calling'
 			else:
 				return None
+		return tool_calling_method
 
 	def get_last_pid(self) -> Optional[int]:
 		"""Get the last pid from the last result"""
@@ -309,10 +309,23 @@ class Agent:
 	@time_execution_async('--get_next_action')
 	async def get_next_action(self, input_messages: list[BaseMessage]) -> AgentOutput:
 		"""Get next action from LLM based on current state"""
-		if self.tool_calling_method is None:
+		try:
+			if self.tool_calling_method is None:
+				structured_llm = self.llm.with_structured_output(self.AgentOutput, include_raw=True)
+			else:
+				# Try with method parameter first, fall back to basic version if it fails
+				try:
+					structured_llm = self.llm.with_structured_output(self.AgentOutput, include_raw=True, method=self.tool_calling_method)
+				except TypeError as e:
+					if "tool_choice" in str(e) or "unexpected keyword argument" in str(e):
+						logger.warning(f"Method parameter not supported, falling back to basic structured output: {e}")
+						structured_llm = self.llm.with_structured_output(self.AgentOutput, include_raw=True)
+					else:
+						raise
+		except Exception as e:
+			logger.error(f"Error setting up structured output: {e}")
+			# Final fallback to basic structured output
 			structured_llm = self.llm.with_structured_output(self.AgentOutput, include_raw=True)
-		else:
-			structured_llm = self.llm.with_structured_output(self.AgentOutput, include_raw=True, method=self.tool_calling_method)
 
 		response: dict[str, Any] = await structured_llm.ainvoke(input_messages)  # type: ignore
 

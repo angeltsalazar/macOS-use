@@ -4,9 +4,11 @@ Test script to verify Notes app search functionality
 """
 
 import asyncio
-import requests
 import time
+
 import Cocoa
+import requests
+
 
 def find_notes_app():
 	"""Find Notes app PID"""

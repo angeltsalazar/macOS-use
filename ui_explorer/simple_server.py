@@ -5,18 +5,16 @@ Simple macOS UI Tree Explorer Server
 Minimal version for testing and debugging serialization issues.
 """
 
-import asyncio
 import logging
-import json
-from typing import Optional, List, Dict, Any
+from typing import Any, List, Optional
 
 import Cocoa
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from mlx_use.mac.tree import MacUITreeBuilder
 from mlx_use.mac.element import MacElementNode
+from mlx_use.mac.tree import MacUITreeBuilder
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

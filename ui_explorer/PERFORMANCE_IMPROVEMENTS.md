@@ -1,4 +1,24 @@
-# Performance Improvements v0.2.0
+# Performance Improvements
+
+## 🔧 Uso del Nuevo Sistema
+
+  from mlx_use.mac.optimized_tree import OptimizedTreeManager
+
+  # Crear manager
+  tree_manager = OptimizedTreeManager()
+
+  # Construir árbol optimizado
+  tree = await tree_manager.build_tree(pid)
+
+  # Buscar elementos
+  results = await tree_manager.search_elements(pid, "button")
+
+  # Obtener estadísticas
+  stats = tree_manager.get_performance_stats()
+
+  El nuevo sistema está listo para usar tanto en el UI Explorer como en los ejemplos, proporcionando mejor rendimiento, cache inteligente y una interfaz más
+  limpia y mantenible.
+
 
 ## Research-Based Optimizations Implemented
 

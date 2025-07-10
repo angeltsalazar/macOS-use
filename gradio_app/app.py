@@ -1,18 +1,11 @@
 import os
-import signal
 import socket
-import asyncio
-import logging
-from typing import Dict, Union, Optional
 
 import gradio as gr
 
 from gradio_app.src.models.app import MacOSUseGradioApp
-from gradio_app.src.ui.interface import (
-    create_agent_tab,
-    create_automations_tab,
-    create_configuration_tab
-)
+from gradio_app.src.ui.interface import create_agent_tab, create_automations_tab, create_configuration_tab
+
 
 def create_interface(app_instance: MacOSUseGradioApp):
     """Create the Gradio interface with all components."""
@@ -260,7 +253,6 @@ Only return the refined prompt text, nothing else.
 
 def find_available_port(start_port: int, max_attempts: int = 100) -> int:
     """Find an available port starting from start_port"""
-    import socket
     
     for port in range(start_port, start_port + max_attempts):
         try:

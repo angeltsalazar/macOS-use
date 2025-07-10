@@ -3,8 +3,9 @@
 Debug search functionality with different queries
 """
 
+
 import requests
-import time
+
 
 def test_search_variations():
 	"""Test search with different case variations"""
@@ -82,7 +83,7 @@ def test_search_variations():
 		response = requests.get(f"http://localhost:8000/api/apps/{notes_pid}/element/1", timeout=10)
 		if response.status_code == 200:
 			element = response.json()
-			print(f"✅ Element at index 1:")
+			print("✅ Element at index 1:")
 			print(f"   Role: {element['role']}")
 			print(f"   Title: '{element['attributes'].get('title', 'No title')}'")
 			print(f"   Actions: {element['actions']}")
@@ -92,7 +93,7 @@ def test_search_variations():
 		print(f"❌ Element lookup error: {e}")
 	
 	# Test interactive elements filter
-	print(f"\n⚡ Testing interactive elements filter...")
+	print("\n⚡ Testing interactive elements filter...")
 	try:
 		response = requests.get(f"http://localhost:8000/api/apps/{notes_pid}/interactive", timeout=30)
 		if response.status_code == 200:

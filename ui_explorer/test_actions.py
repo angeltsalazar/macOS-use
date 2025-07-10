@@ -3,9 +3,10 @@
 Test the action execution functionality
 """
 
-import requests
 import time
-import json
+
+import requests
+
 
 def test_action_functionality():
 	"""Test app activation and action execution"""

@@ -1,8 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, Optional
-
-from mlx_use.controller.registry.views import ActionModel
+from typing import Any, Dict
 
 
 @dataclass

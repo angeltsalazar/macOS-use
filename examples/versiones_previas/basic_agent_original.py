@@ -1,8 +1,8 @@
 # --- START OF FILE examples/basic_agent.py ---
 import asyncio
 import json
-import time
 import logging
+
 import Cocoa
 from langchain_google_genai import ChatGoogleGenerativeAI
 from pydantic import SecretStr
@@ -34,7 +34,7 @@ async def wait_for_app_ready(app, max_attempts=10, delay=2.5) -> bool:
 			if app:
 				app.activateWithOptions_(Cocoa.NSApplicationActivateIgnoringOtherApps)
 				await asyncio.sleep(1)
-				print(f'✅ App is running and ready')
+				print('✅ App is running and ready')
 				return True
 
 			await asyncio.sleep(delay)
@@ -101,7 +101,7 @@ async def main():
 
 		is_ready = await wait_for_app_ready(notes_app)
 		if not is_ready:
-			print(f'❌ App failed to become ready')
+			print('❌ App failed to become ready')
 			return
 
 		builder = MacUITreeBuilder()

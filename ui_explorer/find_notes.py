@@ -5,6 +5,7 @@ Find the correct Notes app process
 
 import Cocoa
 
+
 def find_all_notes_processes():
 	"""Find all Notes-related processes"""
 	
@@ -66,10 +67,10 @@ def check_accessibility(pid):
 	
 	try:
 		from ApplicationServices import (
-			AXUIElementCreateApplication,
 			AXUIElementCopyAttributeValue,
+			AXUIElementCreateApplication,
+			kAXErrorSuccess,
 			kAXRoleAttribute,
-			kAXErrorSuccess
 		)
 		
 		app_ref = AXUIElementCreateApplication(pid)
@@ -94,7 +95,7 @@ if __name__ == "__main__":
 	
 	if notes_pid:
 		check_accessibility(notes_pid)
-		print(f"\n💡 To test with this PID, run:")
+		print("\n💡 To test with this PID, run:")
 		print(f"   python diagnose.py  # (modify the script to use PID {notes_pid})")
 	else:
 		print("\n❌ No suitable Notes process found.")

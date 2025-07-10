@@ -4,10 +4,12 @@ Quick test script to verify the UI Tree Explorer functionality
 """
 
 import asyncio
-import sys
 import time
-from mlx_use.mac.tree import MacUITreeBuilder
+
 import Cocoa
+
+from mlx_use.mac.tree import MacUITreeBuilder
+
 
 async def test_notes_app():
 	"""Test finding 'Nueva Carpeta' button in Notes app"""

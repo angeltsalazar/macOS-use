@@ -1,24 +1,27 @@
-import os
-import json
-import queue
-import logging
 import asyncio
-import traceback
-from pathlib import Path
-from typing import Optional, Generator, AsyncGenerator, List
-from dotenv import load_dotenv, set_key
-import gradio as gr
-
-from ..utils.logging_utils import setup_logging
-from ..models.llm_models import LLM_MODELS, get_llm
-from ..services.google_form import send_prompt_to_google_sheet
-from ..config.example_prompts import EXAMPLE_CATEGORIES
+import json
+import logging
+import os
+import queue
 
 # Import mlx_use from parent directory
 import sys
+import traceback
+from pathlib import Path
+from typing import AsyncGenerator, Generator
+
+import gradio as gr
+from dotenv import load_dotenv, set_key
+
+from ..config.example_prompts import EXAMPLE_CATEGORIES
+from ..models.llm_models import LLM_MODELS, get_llm
+from ..services.google_form import send_prompt_to_google_sheet
+from ..utils.logging_utils import setup_logging
+
 sys.path.append(str(Path(__file__).parent.parent.parent.parent))
 from mlx_use import Agent
 from mlx_use.controller.service import Controller
+
 
 class MacOSUseGradioApp:
     def __init__(self):
@@ -382,7 +385,7 @@ class MacOSUseGradioApp:
                 raise ValueError(f"Failed to initialize {llm_provider} LLM")
             
             # Create the messages
-            from langchain_core.messages import SystemMessage, HumanMessage
+            from langchain_core.messages import HumanMessage, SystemMessage
             messages = [
                 SystemMessage(content=system_message),
                 HumanMessage(content=user_message)

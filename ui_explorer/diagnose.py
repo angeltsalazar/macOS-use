@@ -5,8 +5,11 @@ Diagnostic script to test UI tree building directly
 
 import asyncio
 import json
+
 import Cocoa
+
 from mlx_use.mac.tree import MacUITreeBuilder
+
 
 async def diagnose_notes():
 	"""Diagnose Notes app tree building"""
@@ -55,7 +58,7 @@ async def diagnose_notes():
 			print("❌ Failed to build tree")
 			return
 		
-		print(f"✅ Tree built successfully")
+		print("✅ Tree built successfully")
 		print(f"    Root: {tree.role}")
 		print(f"    Root children: {len(tree.children)}")
 		
@@ -86,7 +89,7 @@ async def diagnose_notes():
 		
 		tree_info = analyze_tree(tree)
 		
-		print(f"\n📊 Tree Analysis:")
+		print("\n📊 Tree Analysis:")
 		print(json.dumps(tree_info, indent=2, default=str)[:2000] + "...")
 		
 		# Count elements by type
@@ -108,10 +111,10 @@ async def diagnose_notes():
 		
 		counts = count_elements(tree)
 		
-		print(f"\n📈 Element Counts:")
+		print("\n📈 Element Counts:")
 		print(f"    Total elements: {counts['total']}")
 		print(f"    Interactive elements: {counts['interactive']}")
-		print(f"    Top roles:")
+		print("    Top roles:")
 		
 		sorted_roles = sorted(counts['by_role'].items(), key=lambda x: x[1], reverse=True)
 		for role, count in sorted_roles[:10]:
@@ -148,7 +151,7 @@ async def diagnose_notes():
 		# Test searches
 		queries = ['nueva carpeta', 'folder', 'button', 'carpeta', 'nueva']
 		
-		print(f"\n🔍 Search Tests:")
+		print("\n🔍 Search Tests:")
 		for query in queries:
 			results = search_elements(tree, query)
 			print(f"    '{query}': {len(results)} results")

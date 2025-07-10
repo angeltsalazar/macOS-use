@@ -3,8 +3,10 @@
 Test AXConfirm text field functionality
 """
 
-import requests
 import time
+
+import requests
+
 
 def test_axconfirm_field():
 	"""Test the AXConfirm text field"""
@@ -54,7 +56,7 @@ def test_axconfirm_field():
 			    'AXConfirm' in element['actions'] and
 			    element['attributes'].get('value') == 'Nueva carpeta'):
 				text_field = element
-				print(f"✅ Found the target text field!")
+				print("✅ Found the target text field!")
 				print(f"   Role: {element['role']}")
 				print(f"   Value: '{element['attributes'].get('value')}'")
 				print(f"   Actions: {element['actions']}")
@@ -98,18 +100,18 @@ def test_axconfirm_field():
 					ok_results = response.json()
 					if ok_results['total_count'] > 0:
 						ok_button = ok_results['elements'][0]
-						print(f"🔘 Found OK button:")
+						print("🔘 Found OK button:")
 						print(f"   Role: {ok_button['role']}")
 						print(f"   Title: '{ok_button['attributes'].get('title', 'No title')}'")
 						print(f"   Actions: {ok_button['actions']}")
 						print(f"   Index: {ok_button['highlight_index']}")
 						
 						if ok_button['role'] == 'AXButton' and 'AXPress' in ok_button['actions']:
-							print(f"\n🎯 This button can be clicked to complete folder creation!")
-							print(f"💡 In the web interface:")
-							print(f"   1. Search for 'OK'")
-							print(f"   2. Click on the OK button element")
-							print(f"   3. Click '🎯 AXPress' to create the folder")
+							print("\n🎯 This button can be clicked to complete folder creation!")
+							print("💡 In the web interface:")
+							print("   1. Search for 'OK'")
+							print("   2. Click on the OK button element")
+							print("   3. Click '🎯 AXPress' to create the folder")
 						
 		else:
 			error_text = response.text if response.text else "Unknown error"
@@ -125,7 +127,7 @@ def test_axconfirm_field():
 	else:
 		print("❌ Search failed")
 
-	print(f"\n📋 Summary:")
+	print("\n📋 Summary:")
 	print("✅ Enhanced text input now supports AXConfirm fields")
 	print("✅ Multiple methods tried for text input")
 	print("✅ Web interface updated with blue text input buttons")

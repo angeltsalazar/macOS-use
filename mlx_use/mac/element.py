@@ -1,7 +1,8 @@
 # --- START OF FILE mac_use/mac/element.py ---
 from dataclasses import dataclass, field
-from typing import Optional, Dict, List, Any
 from functools import cached_property
+from typing import Any, Dict, List, Optional
+
 
 @dataclass
 class MacElementNode:

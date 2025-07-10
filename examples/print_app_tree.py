@@ -1,23 +1,21 @@
 # print_app_tree.py
 # --- START OF FILE examples/basic_agent.py ---
+import asyncio
 import os
 import sys
-import asyncio
-from typing import Optional
+
 import Cocoa
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from mlx_use.mac.tree import MacUITreeBuilder
 from mlx_use.controller.service import Controller
-from mlx_use.controller.views import OpenAppAction
-from mlx_use.agent.views import ActionModel
+from mlx_use.mac.optimized_tree import OptimizedTreeManager
 
 
 async def print_app_tree(app_name: str):
 	try:
 		controller = Controller()
-		# Initialize the UI tree builder
-		builder = MacUITreeBuilder()
+		# Initialize the optimized tree manager
+		tree_manager = OptimizedTreeManager()
 		
 		# Get the workspace to launch app directly
 		workspace = Cocoa.NSWorkspace.sharedWorkspace()
@@ -58,8 +56,8 @@ async def print_app_tree(app_name: str):
 				
 		await asyncio.sleep(1)  # Give it a moment to activate
 		
-		# Build and print the UI tree
-		root = await builder.build_tree(app_pid)
+		# Build the UI tree using the optimized tree manager
+		root = await tree_manager.build_tree(app_pid)
 		
 		if root:
 			print(f'\n✅ Successfully built UI tree for {formatted_app_name}!')
@@ -75,6 +73,13 @@ async def print_app_tree(app_name: str):
 
 			print(f'\nInteractive elements found in {formatted_app_name}:')
 			print(root.get_clickable_elements_string())
+			
+			# Display performance stats
+			print('\nPerformance Stats:')
+			stats = tree_manager.get_performance_stats()
+			print(f'Trees cached: {stats["cache_stats"]["trees_cached"]}')
+			print(f'Search cache size: {stats["cache_stats"]["search_cache_size"]}')
+			print(f'Elements cached: {stats["cache_stats"]["elements_flat_cached"]}')
 		else:
 			print(f'❌ Failed to build UI tree for {formatted_app_name}')
 
@@ -83,8 +88,8 @@ async def print_app_tree(app_name: str):
 		import traceback
 		traceback.print_exc()
 	finally:
-		if 'builder' in locals():
-			builder.cleanup()
+		if 'tree_manager' in locals():
+			tree_manager.cleanup(app_pid if 'app_pid' in locals() else 0)
 
 
 if __name__ == '__main__':

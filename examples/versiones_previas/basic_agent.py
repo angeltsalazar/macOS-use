@@ -1,14 +1,14 @@
 # --- START OF FILE examples/basic_agent.py ---
 import asyncio
-import json
-import time
-import logging
-import os
 import datetime
+import json
+import os
+import time
+
 import Cocoa
 from langchain_anthropic import ChatAnthropic
-from langchain_openai import ChatOpenAI
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from pydantic import SecretStr
 
 from mlx_use.mac.actions import click, type_into

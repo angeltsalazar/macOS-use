@@ -1,5 +1,7 @@
+from typing import List
+
 import gradio as gr
-from typing import Dict, List, Any
+
 
 def create_agent_tab(app_instance) -> List[gr.components.Component]:
     with gr.Row():

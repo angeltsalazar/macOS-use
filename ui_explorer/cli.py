@@ -6,15 +6,15 @@ Provides CLI commands to quickly inspect and query UI trees without the web inte
 Useful for debugging and scripting.
 """
 
-import asyncio
-import json
-import sys
-from typing import Optional, List
 import argparse
+import asyncio
+from typing import List, Optional
 
 import Cocoa
-from mlx_use.mac.tree import MacUITreeBuilder
+
 from mlx_use.mac.element import MacElementNode
+from mlx_use.mac.tree import MacUITreeBuilder
+
 
 class UITreeCLI:
 	def __init__(self):

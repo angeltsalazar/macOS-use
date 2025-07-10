@@ -3,8 +3,10 @@
 Test typing functionality
 """
 
-import requests
 import time
+
+import requests
+
 
 def test_typing_functionality():
 	"""Test the text input functionality"""
@@ -56,7 +58,7 @@ def test_typing_functionality():
 			print(f"      Path: {element['path']}")
 			
 			if 'AXSetValue' in element['actions']:
-				print(f"      ✅ This field supports text input!")
+				print("      ✅ This field supports text input!")
 				
 				# Test typing
 				test_text = "Mi Nueva Carpeta"
@@ -97,8 +99,8 @@ def test_typing_functionality():
 								print(f"      Actions: {ok_element['actions']}")
 								
 								if ok_element['role'] == 'AXButton' and 'AXPress' in ok_element['actions']:
-									print(f"      ✅ This looks like a clickable OK button!")
-									print(f"      💡 You can click this in the web interface!")
+									print("      ✅ This looks like a clickable OK button!")
+									print("      💡 You can click this in the web interface!")
 									break
 						
 						break  # Stop after first successful text input
@@ -123,7 +125,7 @@ def test_typing_functionality():
 					if element['role'] == 'AXButton':
 						print(f"   - Button: '{title}' [Index: {element['highlight_index']}]")
 	
-	print(f"\n📋 Instructions to complete folder creation:")
+	print("\n📋 Instructions to complete folder creation:")
 	print("1. 🔄 Click 'Refresh' in the web interface")
 	print("2. 🔍 Search for 'textfield' to find the name input")
 	print("3. ✏️ Click the green '✏️ AXSetValue (Type Text)' button")

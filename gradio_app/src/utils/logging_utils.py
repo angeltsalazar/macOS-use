@@ -1,5 +1,5 @@
 import logging
-import queue
+
 
 class QueueHandler(logging.Handler):
     def __init__(self, log_queue):

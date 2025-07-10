@@ -4,10 +4,9 @@ MacOS application controller using Accessibility API
 
 import asyncio
 import logging
-import os
 import uuid
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Dict, List, Optional
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Dict, Optional
 
 import objc
 from ApplicationServices import (
@@ -23,7 +22,7 @@ from CoreFoundation import CFRunLoopGetCurrent
 
 from mlx_use.mac.actions import click, type_into
 from mlx_use.mac.tree import MacUITreeBuilder
-from mlx_use.mac.views import MacAppInfo, MacUIState
+from mlx_use.mac.views import MacUIState
 
 if TYPE_CHECKING:
 	from mlx_use.mac.manager import MacManager
