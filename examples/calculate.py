@@ -22,14 +22,23 @@ def set_llm(llm_provider:str = None):
 	if llm_provider == "OAI":
 		api_key = os.getenv('OPENAI_API_KEY')
 		return ChatOpenAI(model='gpt-4o', api_key=SecretStr(api_key))
-	
+
+	if llm_provider == "github":
+		api_key = os.getenv('GITHUB_TOKEN')
+		return ChatOpenAI(model='gpt-4o', base_url="https://models.inference.ai.azure.com", api_key=SecretStr(api_key))
+
+	if llm_provider == "grok":
+		api_key = os.getenv('XAI_API_KEY')
+		return ChatOpenAI(model='grok-2', base_url="https://api.x.ai/v1", api_key=SecretStr(api_key))
+
 	if llm_provider == "google":
 		api_key = os.getenv('GEMINI_API_KEY')
-		return ChatGoogleGenerativeAI(model='gemini-2.0-flash-exp',  api_key=SecretStr(api_key))
+		return ChatGoogleGenerativeAI(model='gemini-2.5-pro',  api_key=SecretStr(api_key))
 	
 llm = set_llm('google')
-llm = set_llm('OAI')
-
+# llm = set_llm('OAI')
+# llm = set_llm('github')
+# llm = set_llm('grok')
 
 controller = Controller()
 

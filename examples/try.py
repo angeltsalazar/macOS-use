@@ -19,11 +19,11 @@ def set_llm(llm_provider:str = None):
 	if not llm_provider:
 		raise ValueError("No llm provider was set")
 	
-	if llm_provider == "OAI" and os.getenv('OPENAI_API_KEY'):
-		return ChatOpenAI(model='gpt-4', api_key=SecretStr(os.getenv('OPENAI_API_KEY')))
-	
 	if llm_provider == "google" and os.getenv('GEMINI_API_KEY'):
 		return ChatGoogleGenerativeAI(model='gemini-2.0-flash-exp', api_key=SecretStr(os.getenv('GEMINI_API_KEY')))
+	
+	if llm_provider == "OAI" and os.getenv('OPENAI_API_KEY'):
+		return ChatOpenAI(model='gpt-4', api_key=SecretStr(os.getenv('OPENAI_API_KEY')))
 	
 	if llm_provider == "anthropic" and os.getenv('ANTHROPIC_API_KEY'):
 		return ChatAnthropic(model='claude-3-sonnet-20240229', api_key=SecretStr(os.getenv('ANTHROPIC_API_KEY')))
