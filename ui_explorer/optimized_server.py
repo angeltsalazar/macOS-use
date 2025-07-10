@@ -30,7 +30,7 @@ from mlx_use.mac.element import MacElementNode
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="macOS UI Tree Explorer - Optimized", version="0.1.0")
+app = FastAPI(title="macOS UI Tree Explorer - Optimized", version="0.2.0")
 
 # Enhanced global state with caching
 class AppTreeCache:
@@ -40,15 +40,18 @@ class AppTreeCache:
 		self.search_cache: Dict[str, List[ElementInfo]] = {}
 		self.last_updated: Dict[int, float] = {}
 		self.builders: Dict[int, MacUITreeBuilder] = {}
+		# New: Incremental loading cache
+		self.partial_trees: Dict[str, MacElementNode] = {}  # key: f"{pid}:{path}"
+		self.element_checksums: Dict[str, str] = {}  # For differential updates
 		self.lock = threading.Lock()
 	
 	def get_builder(self, pid: int) -> MacUITreeBuilder:
-		"""Get or create builder for PID"""
+		"""Get or create builder for PID with aggressive performance optimizations"""
 		if pid not in self.builders:
 			self.builders[pid] = MacUITreeBuilder()
-			# Optimize for performance
-			self.builders[pid].max_children = 100
-			self.builders[pid].max_depth = 8
+			# Aggressive performance optimizations based on research
+			self.builders[pid].max_children = 50   # Reduced from 100
+			self.builders[pid].max_depth = 4       # Reduced from 8 for initial load
 		return self.builders[pid]
 	
 	def invalidate(self, pid: int):
@@ -67,6 +70,26 @@ class AppTreeCache:
 		if pid in self.builders:
 			self.builders[pid].cleanup()
 			del self.builders[pid]
+	
+	def get_element_key(self, pid: int, element_path: str) -> str:
+		"""Generate cache key for partial tree element"""
+		return f"{pid}:{element_path}"
+	
+	def should_load_children(self, element: 'MacElementNode', current_depth: int, max_depth: int) -> bool:
+		"""Determine if children should be loaded based on performance heuristics"""
+		# Always load interactive elements and important containers
+		if element.is_interactive:
+			return current_depth < max_depth
+		
+		# Load children for structural containers up to limited depth
+		if element.role in ['AXWindow', 'AXGroup', 'AXScrollArea', 'AXSplitGroup', 'AXTabGroup', 'AXToolbar']:
+			return current_depth < min(max_depth, 3)  # Limit structural depth
+		
+		# Skip loading children for display-only elements
+		if element.role in ['AXRow', 'AXCell', 'AXTable', 'AXStaticText']:
+			return False
+		
+		return current_depth < 2  # Very conservative for other elements
 
 # Global cache instance
 cache = AppTreeCache()
@@ -220,34 +243,53 @@ def _get_cached_search_key(pid: int, query: str, case_sensitive: bool) -> str:
 	"""Generate cache key for search results"""
 	return f"{pid}:{hashlib.md5(f'{query}:{case_sensitive}'.encode()).hexdigest()}"
 
-async def _build_tree_cached(pid: int, force_refresh: bool = False) -> Optional[MacElementNode]:
-	"""Build tree with caching"""
+async def _build_tree_cached(pid: int, force_refresh: bool = False, lazy_mode: bool = True) -> Optional[MacElementNode]:
+	"""Build tree with caching and lazy loading optimization"""
 	current_time = time.time()
 	
 	# Check if we have a recent cached version
 	if not force_refresh and pid in cache.trees:
 		last_update = cache.last_updated.get(pid, 0)
-		if current_time - last_update < 30:  # 30 second cache
-			logger.info(f"Using cached tree for PID {pid}")
+		cache_age = current_time - last_update
+		if cache_age < 30:  # 30 second cache
+			logger.info(f"Using cached tree for PID {pid} (age: {cache_age:.1f}s)")
 			return cache.trees[pid]
 	
-	# Build new tree
-	logger.info(f"Building fresh tree for PID {pid}")
+	# Build new tree with performance optimizations
+	start_time = time.time()
+	logger.info(f"Building {'lazy' if lazy_mode else 'full'} tree for PID {pid}")
 	builder = cache.get_builder(pid)
+	
+	# Apply aggressive optimizations for lazy mode
+	if lazy_mode:
+		original_max_depth = builder.max_depth
+		original_max_children = builder.max_children
+		# Ultra-aggressive settings for initial load
+		builder.max_depth = 3      # Very shallow initial load
+		builder.max_children = 25  # Limit children per level
 	
 	try:
 		tree = await builder.build_tree(pid)
+		build_time = time.time() - start_time
+		
 		if tree:
 			with cache.lock:
 				cache.trees[pid] = tree
 				cache.last_updated[pid] = current_time
 				# Invalidate elements cache to force rebuild
 				cache.elements_flat.pop(pid, None)
-			logger.info(f"Tree built successfully for PID {pid}")
+			
+			logger.info(f"Tree built successfully for PID {pid} in {build_time:.2f}s ({'lazy' if lazy_mode else 'full'} mode)")
 		return tree
+		
 	except Exception as e:
 		logger.error(f"Error building tree for PID {pid}: {e}")
 		return None
+	finally:
+		# Restore original settings
+		if lazy_mode:
+			builder.max_depth = original_max_depth
+			builder.max_children = original_max_children
 
 def _flatten_tree_cached(pid: int) -> List[ElementInfo]:
 	"""Get flattened elements with caching"""
@@ -1236,7 +1278,9 @@ async def get_app_tree(pid: int, max_depth: int = None, force: bool = False, qui
 						max_depth = 5 if interactive_only else 3
 					return _convert_tree_to_json_incremental(cache.trees[pid], max_depth, interactive_only=interactive_only)
 		
-		tree = await _build_tree_cached(pid, force_refresh=force)
+		# Use lazy loading for better performance, except when explicitly requesting full tree
+		lazy_mode = not force  # Force refresh means full tree
+		tree = await _build_tree_cached(pid, force_refresh=force, lazy_mode=lazy_mode)
 		if not tree:
 			raise HTTPException(status_code=404, detail="Could not build UI tree for application")
 		
@@ -1246,9 +1290,9 @@ async def get_app_tree(pid: int, max_depth: int = None, force: bool = False, qui
 		
 		# Log filtering info
 		if interactive_only:
-			logger.info(f"Building tree for PID {pid} with interactive-only filter (max_depth={max_depth}, reduces errors and improves performance)")
+			logger.info(f"Building tree for PID {pid} with interactive-only filter (max_depth={max_depth}, lazy_mode={lazy_mode})")
 		else:
-			logger.info(f"Building tree for PID {pid} with all elements (max_depth={max_depth})")
+			logger.info(f"Building tree for PID {pid} with all elements (max_depth={max_depth}, lazy_mode={lazy_mode})")
 		
 		return _convert_tree_to_json_incremental(tree, max_depth, interactive_only=interactive_only)
 		
@@ -1257,6 +1301,61 @@ async def get_app_tree(pid: int, max_depth: int = None, force: bool = False, qui
 		# Clean up on error
 		cache.cleanup_builder(pid)
 		cache.invalidate(pid)
+		raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/apps/{pid}/expand")
+async def expand_element(pid: int, element_path: str):
+	"""Expand a specific element to load its children on-demand"""
+	try:
+		# Get cached tree
+		if pid not in cache.trees:
+			raise HTTPException(status_code=404, detail="Tree not available. Load tree first.")
+		
+		tree = cache.trees[pid]
+		
+		# Find the element to expand
+		def find_element_by_path(node: MacElementNode, target_path: str) -> Optional[MacElementNode]:
+			if node.accessibility_path == target_path:
+				return node
+			for child in node.children:
+				result = find_element_by_path(child, target_path)
+				if result:
+					return result
+			return None
+		
+		element = find_element_by_path(tree, element_path)
+		if not element:
+			raise HTTPException(status_code=404, detail="Element not found")
+		
+		# Build deeper tree for this element using full depth
+		builder = cache.get_builder(pid)
+		original_max_depth = builder.max_depth
+		builder.max_depth = 8  # Allow deeper expansion
+		
+		try:
+			# Re-process this element with deeper traversal
+			expanded_element = await builder._process_element(element._element_ref, pid, element.parent, 0)
+			if expanded_element:
+				# Replace the element in the tree
+				element.children = expanded_element.children
+				
+				# Convert to response format
+				element_info = _convert_element_to_info(element)
+				children = [_convert_tree_to_json_incremental(child, 3, interactive_only=True) 
+						   for child in element.children]
+				
+				return {
+					"element": element_info,
+					"children": children,
+					"expanded": True
+				}
+		finally:
+			builder.max_depth = original_max_depth
+		
+		raise HTTPException(status_code=500, detail="Failed to expand element")
+		
+	except Exception as e:
+		logger.error(f"Error expanding element for PID {pid}: {e}")
 		raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/apps/{pid}/search", response_model=ElementSearchResult)
@@ -1635,6 +1734,43 @@ async def get_element_by_index(pid: int, highlight_index: int):
 		logger.error(f"Error getting element by index: {e}")
 		raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/performance/stats")
+async def get_performance_stats():
+	"""Get performance statistics and cache information"""
+	try:
+		with cache.lock:
+			current_time = time.time()
+			stats = {
+				"cache_stats": {
+					"trees_cached": len(cache.trees),
+					"search_cache_size": len(cache.search_cache),
+					"elements_flat_cached": len(cache.elements_flat),
+					"partial_trees_cached": len(cache.partial_trees)
+				},
+				"tree_ages": {
+					str(pid): round(current_time - last_updated, 1)
+					for pid, last_updated in cache.last_updated.items()
+				},
+				"optimization_settings": {
+					"default_max_depth_interactive": 5,
+					"default_max_depth_all": 3,
+					"lazy_load_max_depth": 3,
+					"lazy_load_max_children": 25,
+					"cache_expiry_seconds": 30
+				},
+				"memory_optimization": {
+					"interactive_filtering": True,
+					"lazy_loading": True,
+					"differential_updates": False,  # Not implemented yet
+					"async_processing": False      # Not implemented yet
+				}
+			}
+		
+		return stats
+	except Exception as e:
+		logger.error(f"Error getting performance stats: {e}")
+		raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/api/cache/clear")
 async def clear_caches():
 	"""Clear all caches"""
@@ -1649,6 +1785,8 @@ async def clear_caches():
 			cache.elements_flat.clear()
 			cache.search_cache.clear()
 			cache.last_updated.clear()
+			cache.partial_trees.clear()
+			cache.element_checksums.clear()
 		
 		# Clear LRU cache
 		_get_cached_search_key.cache_clear()
